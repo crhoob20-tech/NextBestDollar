@@ -6,7 +6,7 @@ from uuid import uuid4
 from copy import deepcopy
 import math
 from storage import save_state
-from ui import Button, style_widgets
+from ui import Button, style_widgets, RoundedCard
 import sqlite3
 
 TYPES = ['Pay off debt', 'Buy a home', 'Buy a car', 'Invest', 'Vacation', 'Children / family', 'Emergency fund', 'Other milestone']
@@ -67,7 +67,7 @@ def goal_status(goal):
     return 'In progress'
 
 
-def build_goals(parent, state, refresh):
+def build_goals(parent, state, refresh, open_plan=None):
     top = tk.Frame(parent, bg=BG)
     top.pack(fill='x', padx=26, pady=14)
     tk.Label(top, text='Your big milestones', font=('Helvetica', 18, 'bold'), bg=BG, fg=TEXT).pack(side='left')
@@ -85,28 +85,29 @@ def build_goals(parent, state, refresh):
     bar.pack(side='right',fill='y');canvas.pack(side='left',fill='both',expand=True)
     from suggestions import suggested_goals
     suggestions = suggested_goals(state)
-    if suggestions:
-        tk.Label(body,text='Suggested for you',font=('Helvetica',14,'bold'),bg=BG,fg=TEXT).pack(anchor='w',pady=(8,6))
-        for suggestion in suggestions:
-            card=tk.Frame(body,bg=WHITE,highlightbackground='#D4DCE7',highlightthickness=1)
-            card.pack(fill='x',pady=5)
-            tk.Label(card,text=suggestion['name'],font=('Helvetica',12,'bold'),bg=WHITE,fg=TEXT).pack(anchor='w',padx=16,pady=(12,4))
-            tk.Label(card,text=suggestion['reason'],bg=WHITE,fg=MUTED,wraplength=680,justify='left').pack(anchor='w',padx=16,pady=4)
-            Button(card,text='Review goal',command=lambda p=suggestion: GoalEditor(parent.winfo_toplevel(),state,refresh,preset=p)).pack(anchor='w',padx=16,pady=(4,12))
     tk.Label(body,text='Your saved goals',font=('Helvetica',14,'bold'),bg=BG,fg=TEXT).pack(anchor='w',pady=(16,6))
     goals=state.get('goals',[])
     if not goals:
         tk.Label(body,text='No goals yet. Add a milestone to get started.',bg=BG,fg=MUTED).pack(anchor='w',pady=20)
+    if goals:
+        from ui import panel, copy_label
+        summary=panel(body)
+        total=sum(g['target_amount'] for g in goals)
+        progress=sum(min(g['progress_amount'],g['target_amount']) for g in goals)
+        copy_label(summary,f'{len(goals)} milestones · ${max(0,total-progress):,.0f} left to fund',18,True)
+        copy_label(summary,'Progress across your targets—not extra account balances.',color=MUTED)
     def remove(index):
         if messagebox.askyesno('Remove goal?', 'Remove this goal and its saved progress?', parent=parent.winfo_toplevel()):
             draft=deepcopy(state)
             draft['goals'].pop(index)
-            save_state(draft)
+            try:save_state(draft)
+            except sqlite3.Error as exc:
+                messagebox.showerror('Could not remove goal',str(exc),parent=parent.winfo_toplevel());return
             state.update(draft)
             refresh()
     for index, goal in enumerate(goals):
-        card=tk.Frame(body,bg=WHITE,highlightbackground='#D4DCE7',highlightthickness=1)
-        card.pack(fill='x',pady=6)
+        surface=RoundedCard(body);surface.pack(fill='x',pady=6)
+        card=surface.content
         tk.Label(card,text=goal['name'],font=('Helvetica',14,'bold'),bg=WHITE,fg=TEXT).pack(anchor='w',padx=16,pady=(14,4))
         tk.Label(card,text=f"{goal['type']}  •  {goal['priority']} priority  •  {goal_status(goal)}",bg=WHITE,fg=MUTED).pack(anchor='w',padx=16)
         remaining=max(0,goal['target_amount']-goal['progress_amount'])
@@ -118,8 +119,27 @@ def build_goals(parent, state, refresh):
         if goal.get('notes'):
             tk.Label(card,text=goal['notes'],bg=WHITE,fg=MUTED,wraplength=680,justify='left').pack(anchor='w',padx=16,pady=5)
         actions=tk.Frame(card,bg=WHITE);actions.pack(fill='x',padx=16,pady=(5,12))
-        Button(actions,text='Edit goal / progress',command=lambda i=index:GoalEditor(parent.winfo_toplevel(),state,refresh,i)).pack(side='left')
-        Button(actions,text='Remove',command=lambda i=index:remove(i)).pack(side='left',padx=8)
+        Button(actions,text='Update',command=lambda i=index:GoalEditor(parent.winfo_toplevel(),state,refresh,i)).pack(side='left')
+        Button(actions,text='Remove',command=lambda i=index:remove(i),bg=WHITE,fg=MUTED).pack(side='right',padx=8)
+        if open_plan and goal['type']!='Pay off debt':
+            kind={'Children / family':'529','Invest':'brokerage'}.get(goal['type'],'hysa')
+            Button(actions,text='Project growth',command=lambda g=goal,k=kind:open_plan({'goal_id':g.get('id'),'account_type':k}),bg='#E7EFFF',fg=BLUE).pack(side='left',padx=8)
+        if remaining and goal.get('target_date'):
+            months=max(1,math.ceil((date.fromisoformat(goal['target_date'])-date.today()).days/30.4375))
+            text=(f'About ${remaining/months:,.0f}/month to close the gap, assuming no growth.' if goal_status(goal)!='Target date passed' else 'Choose a new date to see a monthly savings target.')
+            tk.Label(card,text=text,bg=WHITE,fg=MUTED,wraplength=650,justify='left').pack(anchor='w',padx=16,pady=(0,14))
+    if suggestions:
+        ideas=tk.Frame(body,bg=BG)
+        def toggle():
+            if ideas.winfo_manager():ideas.pack_forget()
+            else:ideas.pack(fill='x',pady=8)
+        Button(body,text='Need an idea? Explore suggested goals',command=toggle,bg='#E7EFFF',fg=BLUE).pack(anchor='w',pady=16)
+        for suggestion in suggestions:
+            from ui import panel, copy_label
+            card=panel(ideas)
+            copy_label(card,suggestion['name'],14,True)
+            copy_label(card,suggestion['reason'],color=MUTED)
+            Button(card,text='Personalize this goal',command=lambda p=suggestion:GoalEditor(parent.winfo_toplevel(),state,refresh,preset=p)).pack(anchor='w',pady=8)
 
 
 class GoalEditor(tk.Toplevel):

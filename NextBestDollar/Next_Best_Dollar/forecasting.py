@@ -22,7 +22,7 @@ def project(initial,monthly,years,annual,increase=0,employer=0):
 
 GROUPS = {
     'Savings & investing': [('hysa','High-yield savings (cash)'),('savings','Savings (cash)'),('brokerage','Brokerage (investments)')],
-    'Retirement': [('retirement_employer','Workplace retirement'),('ira','IRA')],
+    'Retirement': [('retirement_employer','Workplace retirement'),('ira','Roth / traditional IRA')],
     'Children & education': [('savings','Savings for a child'),('529','529 education account')],
     'Health': [('hsa','Health Savings Account (HSA)')],
 }
@@ -31,8 +31,8 @@ EXPLAIN = {
     'savings':'Money set aside for a goal. Enter your savings rate in More options.',
     'brokerage':'An account for investments such as funds, stocks and bonds. Value can rise or fall.',
     'retirement_employer':'A retirement account through work. Use your payroll contribution; employer dollars are optional.',
-    'ira':'A retirement account you open yourself. Its investments determine growth and risk.',
-    '529':'An education-focused account. Check eligible expenses and plan rules before choosing it.',
+    'ira':'Retirement on your terms. A Roth IRA uses after-tax contributions; qualified withdrawals can be tax-free. A traditional IRA has different tax treatment. Eligibility and annual limits apply. The investments inside the account determine growth.',
+    '529':'Saving for a child’s education? Explore a 529. Investment choices often include age-based portfolios. Qualified education withdrawals can receive tax benefits; fees, state benefits and eligible expenses vary by plan.',
     'hsa':'An account for eligible health expenses. Eligibility matters; money may be held in cash or invested.',
 }
 
@@ -66,7 +66,7 @@ class PlanView:
     def __init__(self,parent,state,context):
         from ui import style_widgets
         style_widgets(parent)
-        self.state=state;self.context=context;self.drafts={};self.goal=None;self.ira_check=None
+        self.state=state;self.context=context;self.drafts={};self.goal=None;self.ira_check=None;self.return_notes={}
         outer=tk.Frame(parent,bg=BG);outer.pack(fill='both',expand=True,padx=26,pady=10)
         self.canvas=tk.Canvas(outer,bg=BG,highlightthickness=0)
         scroll=ttk.Scrollbar(outer,orient='vertical',command=self.canvas.yview)
@@ -86,8 +86,27 @@ class PlanView:
         widget=tk.Label(parent or self.body,text=text,bg=BG,fg=TEXT if bold else MUTED,wraplength=710,justify='left',font=('Helvetica',15,'bold') if bold else ('Helvetica',10))
         widget.pack(anchor='w',pady=(8,8));return widget
     def choose(self):
-        self.clear('1. What are you planning for?')
-        menu=ttk.Combobox(self.body,textvariable=self.group,values=list(GROUPS),state='readonly');menu.pack(fill='x',pady=6)
+        self.clear('What do you want your money to do?')
+        self.label('1  Choose your purpose     →     2  Build a scenario     →     3  Explore the future')
+        purposes=tk.Frame(self.body,bg=BG);purposes.pack(fill='x',pady=10)
+        descriptions={
+            'Savings & investing':('Build wealth or save soon','Cash savings for near-term needs; brokerage for investing.'),
+            'Retirement':('Prepare for retirement','Explore workplace plans and Roth / traditional IRAs.'),
+            'Children & education':('Give a child a head start','Compare a 529 education plan with cash savings.'),
+            'Health':('Plan for health costs','Explore an HSA if you meet eligibility requirements.'),
+        }
+        purpose_buttons=[]
+        for index,(group,(title,description)) in enumerate(descriptions.items()):
+            tile=tk.Frame(purposes,bg=WHITE,highlightbackground='#DEE5EF',highlightthickness=1)
+            tile.grid(row=index//2,column=index%2,sticky='nsew',padx=(0,8) if index%2==0 else (8,0),pady=8)
+            radio=tk.Radiobutton(tile,text=title,variable=self.group,value=group,bg=WHITE,fg=TEXT,
+                selectcolor='#E7EFFF',activebackground=WHITE,font=('Helvetica',12,'bold'),anchor='w',
+                command=lambda:populate())
+            radio.pack(fill='x',padx=12,pady=(12,4));purpose_buttons.append(radio)
+            from ui import copy_label
+            description_label=copy_label(tile,description,color=MUTED)
+            description_label.pack_configure(padx=16,pady=(0,16))
+            purposes.columnconfigure(index%2,weight=1,uniform='purpose')
         if self.group.get()=='Retirement':
             from occupation import prompt
             self.label(prompt(self.state.get('personal',{}).get('work_sector','')))
@@ -103,7 +122,7 @@ class PlanView:
         def changed(event=None):
             self.chosen=self.choices[account.current()];self.selected_key=self.chosen['key']
             explanation.config(text=EXPLAIN[self.chosen['type']])
-        menu.bind('<<ComboboxSelected>>',populate);account.bind('<<ComboboxSelected>>',changed);populate()
+        account.bind('<<ComboboxSelected>>',changed);populate()
         self.label('Connect a savings goal (optional)')
         self.goals=[g for g in self.state.get('goals',[]) if g.get('type')!='Pay off debt']
         goals=ttk.Combobox(self.body,values=['No goal selected']+[g['name'] for g in self.goals],state='readonly');goals.pack(fill='x',pady=6)
@@ -111,7 +130,7 @@ class PlanView:
         def proceed():
             self.goal=self.goals[goals.current()-1] if goals.current()>0 else None
             self.numbers()
-        self.label('Checking stays in your financial snapshot as everyday cash; it is not a contribution destination here.')
+        self.label('An account is the container. Cash, funds, stocks or bonds inside it determine the return—not the account name. No account is opened here.')
         Button(self.body,text='Continue to my numbers',command=proceed).pack(anchor='w',pady=12)
     def numbers(self):
         from datetime import date
@@ -142,20 +161,20 @@ class PlanView:
         elif self.goal and suggestion is not None and suggestion>0:reason='Suggested starting amount uses your remaining goal and selected horizon, capped at your recorded surplus. Review the amount if you change the horizon.'
         self.label(reason)
         entry(self.body,'years','Years from now')
+        entry(self.body,'annual','Annual return assumption (%)')
+        if key not in self.return_notes:
+            self.return_notes[key]=tk.StringVar(value=self.state.get('forecast_return_notes',{}).get(key,''))
+        from return_guidance import build_return_guidance
+        build_return_guidance(self.body,kind,self.fields['annual'],self.return_notes[key])
         advanced=tk.Frame(self.body,bg=BG)
-        toggle=Button(self.body,text='More options: returns, annual increases & employer',command=lambda:None)
+        toggle=Button(self.body,text='Optional: contribution increases & employer',command=lambda:None)
         toggle.pack(anchor='w',pady=12)
         def expand():
-            if advanced.winfo_manager():advanced.pack_forget();toggle.config(text='More options: returns, annual increases & employer')
+            if advanced.winfo_manager():advanced.pack_forget();toggle.config(text='Optional: contribution increases & employer')
             else:advanced.pack(fill='x',after=toggle);toggle.config(text='Hide more options')
         toggle.command=expand
         # Button bindings use the callable passed at creation.
         toggle.bind('<Button-1>',lambda e:expand());toggle.bind('<Return>',lambda e:expand());toggle.bind('<space>',lambda e:expand())
-        entry(advanced,'annual','Annual growth / savings-rate assumption (%)')
-        self.label('Starts at 0%: your contributions only. Savings: use your account rate. Investments: test a return assumption; losses are possible.',parent=advanced)
-        if kind in ('brokerage','ira','retirement_employer','529','hsa'):
-            rates=tk.Frame(advanced,bg=BG);rates.pack(fill='x')
-            for r in (0,6,8,11):Button(rates,text=f'{r}% example',command=lambda v=r:self.fields['annual'].set(str(v))).pack(side='left',padx=4)
         entry(advanced,'increase','Increase monthly contributions each year (%)')
         if kind=='retirement_employer':
             entry(advanced,'employer','Employer contribution per month ($)')
@@ -199,6 +218,21 @@ class PlanView:
         if self.chosen['type']=='ira':self.label('IRA eligibility checked against your supplied 2026 facts. Future-year income and limits are unknown; this is a constant-current-rules illustration, not future eligibility approval.')
         self.label(f"${rows[-1][3]:,.0f} in {int(values['years'])} years",True)
         self.label(f"Starting money + additions: ${rows[-1][1]:,.0f}    Modeled growth/loss: ${rows[-1][2]:,.0f}")
+        self.label(f"${values['monthly']:,.2f}/month • {values['annual']:g}% annual return assumption")
+        self.label('Illustration in future dollars. Taxes, fees, inflation and withdrawals are excluded. Market losses and changing returns are possible.')
+        note=self.return_notes[self.chosen['key']].get().strip()
+        if note:self.label('Your investment / history note (not verified): '+note)
+        if self.chosen['type'] in ('brokerage','ira','retirement_employer','529','hsa'):
+            self.label('How sensitive is the outcome to returns?',True)
+            comparison=tk.Frame(self.body,bg=BG);comparison.pack(fill='x',pady=8)
+            for index,(title,rate) in enumerate([('Lower return',max(-99,values['annual']-2)),('Your assumption',values['annual']),('Higher return',min(100,values['annual']+2))]):
+                end=project(**dict(values,annual=rate))[-1][3]
+                card=tk.Frame(comparison,bg=WHITE);card.grid(row=0,column=index,sticky='nsew',padx=4)
+                from ui import copy_label
+                copy_label(card,f'{title} · {rate:g}%',color=MUTED).pack_configure(padx=12)
+                copy_label(card,f'${end:,.0f}',18,True).pack_configure(padx=12,pady=12)
+                comparison.columnconfigure(index,weight=1,uniform='outcome')
+            self.label('These are fixed-rate examples, not a probability range or a worst-case estimate. Actual results can fall outside all three.')
         free=self.state.get('financial_metrics',{}).get('monthly_free_cash_flow')
         if free is not None and self.chosen['type']!='retirement_employer' and values['monthly']>max(0,free):
             self.label('This hypothetical contribution exceeds your current recorded monthly surplus. Update your budget before adopting it.')
@@ -208,7 +242,7 @@ class PlanView:
             if self.goal.get('target_date'):self.label('Goal date: '+self.goal['target_date']+'. The table uses whole years from today.')
         from visual_charts import projection_chart
         projection_chart(self.body,rows,values['initial'])
-        if values['annual']==0:self.label('0% growth selected: this view shows your starting balance and contributions only. Change More options to test investment growth.')
+        if values['annual']==0:self.label('0% growth selected: this view shows your starting balance and contributions only. Adjust your annual return to test investment growth.')
         details=tk.Frame(self.body,bg=BG)
         toggle=Button(self.body,text='View year-by-year numbers & assumptions',command=lambda:None)
         toggle.pack(anchor='w',pady=6)
@@ -232,6 +266,7 @@ class PlanView:
             from storage import save_state
             import sqlite3
             draft=deepcopy(self.state);draft.setdefault('forecast_plans',{})[self.chosen['key']]=values
+            draft.setdefault('forecast_return_notes',{})[self.chosen['key']]=self.return_notes[self.chosen['key']].get().strip()
             if self.chosen['type']=='ira':draft['ira_check_inputs']=self.ira_check[0]
             try:save_state(draft)
             except sqlite3.Error as exc:status.config(text=f'Could not save: {exc}');return
