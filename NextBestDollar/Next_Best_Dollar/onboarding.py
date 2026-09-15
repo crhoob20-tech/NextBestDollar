@@ -82,7 +82,6 @@ class SmartCombobox(ttk.Combobox):
         )
 
         self.bind("<KeyRelease>", self._filter_values)
-        self.bind("<Button-1>", self._open_dropdown, add="+")
         self.bind("<FocusIn>", self._restore_values, add="+")
 
     def _open_dropdown(self, event=None):
@@ -188,6 +187,7 @@ def calculate_personal_scores(personal):
 class OnboardingFlow(tk.Toplevel):
     def __init__(self, parent, app_state, on_complete=None, edit_only=False):
         super().__init__(parent)
+        self._nbd_scrollbar_only = True
 
         self.parent = parent
         self.app_state = app_state

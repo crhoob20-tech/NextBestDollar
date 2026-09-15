@@ -69,7 +69,10 @@ class AppButton(tk.Label):
             padx=padx,
             pady=pady,
             anchor=anchor,
-            cursor="arrow"
+            cursor="arrow",
+            takefocus=True,
+            highlightthickness=1,
+            highlightcolor=PRIMARY
         )
 
         self.command = command
@@ -79,6 +82,8 @@ class AppButton(tk.Label):
         self.hover_fg = hover_fg or fg
 
         self.bind("<Button-1>", self._click)
+        self.bind("<Return>", self._click)
+        self.bind("<space>", self._click)
         self.bind("<Enter>", self._enter)
         self.bind("<Leave>", self._leave)
 
@@ -117,9 +122,10 @@ class NextBestDollarApp(tk.Tk):
     def __init__(self):
         super().__init__()
 
-        from ui import install_scrolling
+        from ui import install_scrolling, style_widgets
         install_scrolling(self)
-        self.title("Next Best Dollar")
+        style_widgets(self)
+        self.title("Next Best Dollar — Refined v0.4")
         self.geometry("1200x820")
         self.minsize(960, 700)
         self.configure(bg=MAIN_BG)
@@ -130,6 +136,8 @@ class NextBestDollarApp(tk.Tk):
         self.build_shell()
         self.show_page("Dashboard")
         self.refresh_after_onboarding()
+        if not app_state.get("personal_complete") or not app_state.get("behavioral_complete"):
+            self.after(400, self.start_onboarding_placeholder)
 
     # ========================================================
     # SHELL
@@ -166,7 +174,7 @@ class NextBestDollarApp(tk.Tk):
 
         tk.Label(
             brand,
-            text="Make the next dollar matter.",
+            text="Refined v0.4 · September 15",
             font=FONT_SMALL,
             fg="#B8C2D1",
             bg=SIDEBAR_BG
@@ -250,6 +258,7 @@ class NextBestDollarApp(tk.Tk):
             fg=MUTED,
             bg=MAIN_BG
         )
+        self.page_subtitle.config(wraplength=440, justify="left")
         self.page_subtitle.pack(anchor="w", pady=(5, 0))
 
         self.profile_button = AppButton(
@@ -264,7 +273,7 @@ class NextBestDollarApp(tk.Tk):
             padx=18,
             pady=10
         )
-        # Profile editing lives in the Profile page.
+        self.profile_button.pack(side="right", padx=(12, 0))
 
     # ========================================================
     # PAGE SWITCHING
@@ -301,7 +310,7 @@ class NextBestDollarApp(tk.Tk):
             ),
             "Plan": (
                 "Next Best Dollar",
-                "Explore how contributions and time could change your balance."
+                "Choose a purpose. Explore accounts. See what your money could become."
             ),
             "Research": (
                 "Research",
@@ -398,8 +407,28 @@ class NextBestDollarApp(tk.Tk):
     # DASHBOARD
     # ========================================================
     def build_dashboard(self):
-        page = tk.Frame(self.page_container, bg=MAIN_BG)
-        page.pack(fill="both", expand=True, padx=34, pady=(8, 30))
+        from tkinter import ttk
+        container = tk.Frame(self.page_container, bg=MAIN_BG)
+        container.pack(fill="both", expand=True, padx=24, pady=(8, 16))
+        canvas = tk.Canvas(container, bg=MAIN_BG, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(container, command=canvas.yview)
+        scrollbar.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+        canvas.configure(yscrollcommand=scrollbar.set)
+        page = tk.Frame(canvas, bg=MAIN_BG)
+        window = canvas.create_window((0, 0), window=page, anchor="nw")
+        page.bind("<Configure>", lambda event: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.bind("<Configure>", lambda event: canvas.itemconfigure(window, width=event.width))
+
+        from recommendations import build_next_step
+        build_next_step(page, app_state, lambda section: self.show_page("Goals") if section == "goals" else self.edit_section(2, section))
+        if not all(app_state.get(key) for key in ('personal_complete','behavioral_complete','financial_complete')):
+            from ui import panel, copy_label, Button
+            intro = panel(page)
+            copy_label(intro, 'Your starting profile', 15, True)
+            for label, key in [('About you', 'personal_complete'), ('Money habits', 'behavioral_complete'), ('Your finances', 'financial_complete')]:
+                copy_label(intro, ('✓  ' if app_state.get(key) else '○  ') + label, color=MUTED)
+            Button(intro, text='Continue my profile', command=self.start_onboarding_placeholder).pack(anchor='w', pady=8)
 
         self.section_title(
             page,
@@ -427,18 +456,19 @@ class NextBestDollarApp(tk.Tk):
             ("Monthly cash flow", monthly_cash_flow, "Income minus monthly spending and debt minimums"),
             ("Cash reserves", cash_reserves, "Available liquid savings"),
             ("Total debt", total_debt, "Outstanding debt balances"),
-            ("Investable surplus", investable_surplus, "Estimated monthly money available for allocation"),
+            ("Left to assign", investable_surplus, "Before extra savings, debt payments and goals; not automatically safe to invest"),
         ]
 
         for i, data in enumerate(metric_data):
             card = self.metric_card(metric_grid, *data)
             card.grid(
-                row=0,
-                column=i,
+                row=i // 2,
+                column=i % 2,
                 sticky="nsew",
-                padx=(0 if i == 0 else 6, 0 if i == 3 else 6)
+                padx=(0, 8) if i % 2 == 0 else (8, 0),
+                pady=8
             )
-            metric_grid.grid_columnconfigure(i, weight=1)
+            metric_grid.grid_columnconfigure(i % 2, weight=1, uniform="snapshot")
 
         controls = tk.Frame(page, bg=MAIN_BG)
         controls.pack(fill="x", pady=(15, 0))
@@ -453,6 +483,16 @@ class NextBestDollarApp(tk.Tk):
         from visual_charts import flow_chart
         snapshot_card=self.card(page);snapshot_card.pack(fill='x')
         flow_chart(snapshot_card,app_state)
+        from financial import normalize_financial
+        financial = normalize_financial(app_state.get('financial', {}))
+        spending = financial['spending']
+        total = sum(spending.values())
+        if total > 0:
+            tk.Label(snapshot_card, text="Where your spending goes (debt minimums shown separately above)", bg=CARD_BG, fg=TEXT, font=FONT_SUBHEADER).pack(anchor='w', padx=18, pady=(8, 4))
+            for category, amount in sorted(spending.items(), key=lambda item: item[1], reverse=True):
+                if amount > 0:
+                    name = category.replace('_', ' ').capitalize()
+                    tk.Label(snapshot_card, text=f"{name}: ${amount:,.2f}/month · {amount / total:.0%} of living spending", bg=CARD_BG, fg=MUTED).pack(anchor='w', padx=18, pady=3)
 
         self.section_title(
             page,
@@ -557,7 +597,7 @@ class NextBestDollarApp(tk.Tk):
     # ========================================================
     def build_goals_page(self):
         from goals import build_goals
-        build_goals(self.page_container, app_state, lambda: self.show_page("Goals"))
+        build_goals(self.page_container, app_state, lambda: self.show_page("Goals"), self.open_plan)
 
     # ========================================================
     # PLAN PAGE
@@ -571,14 +611,23 @@ class NextBestDollarApp(tk.Tk):
         from tkinter import ttk
         from allocation import build_allocation
         from life_timeline import build_timeline
-        tabs=ttk.Notebook(self.page_container);tabs.pack(fill='both',expand=True,padx=14,pady=8)
-        allocation=tk.Frame(tabs,bg=MAIN_BG);forecast=tk.Frame(tabs,bg=MAIN_BG)
-        tabs.add(allocation,text='Monthly allocation');tabs.add(forecast,text='Account projection')
-        timeline=tk.Frame(tabs,bg=MAIN_BG);tabs.add(timeline,text='Life & debt timeline')
-        build_timeline(timeline,app_state)
-        build_allocation(allocation,app_state,self.open_plan)
+        tabs=ttk.Notebook(self.page_container)
+        tabs.pack(fill='both',expand=True,padx=24,pady=12)
+        forecast=tk.Frame(tabs,bg=MAIN_BG)
+        allocation=tk.Frame(tabs,bg=MAIN_BG)
+        timeline=tk.Frame(tabs,bg=MAIN_BG)
+        tabs.add(forecast,text='Grow my money')
+        tabs.add(allocation,text='Monthly budget')
+        tabs.add(timeline,text='Life & debt timeline')
         build_forecast(forecast,app_state,getattr(self,'plan_context',None))
-        if getattr(self,'plan_context',None):tabs.select(forecast)
+        built={str(forecast)}
+        def select(event=None):
+            selected=tabs.select()
+            if selected in built:return
+            built.add(selected)
+            if selected==str(allocation):build_allocation(allocation,app_state,self.open_plan)
+            else:build_timeline(timeline,app_state)
+        tabs.bind('<<NotebookTabChanged>>',select)
 
     # ========================================================
     # RESEARCH PAGE
@@ -643,7 +692,7 @@ class NextBestDollarApp(tk.Tk):
             self.profile_button.config(
                 text="Edit Profile"
             )
-        elif app_state.get("personal_complete") or app_state.get("behavioral_complete"):
+        elif app_state.get("personal_complete") or app_state.get("behavioral_complete") or app_state.get("financial_complete"):
             self.sidebar_status.config(
                 text="In progress",
                 fg=AMBER

@@ -211,6 +211,7 @@ class AppButton(tk.Label):
 class FinancialFlow(tk.Toplevel):
     def __init__(self, parent, app_state, on_complete=None, start_section="income"):
         super().__init__(parent)
+        self._nbd_scrollbar_only = True
 
         self.parent = parent
         self.app_state = app_state

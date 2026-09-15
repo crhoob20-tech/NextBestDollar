@@ -34,10 +34,10 @@ def build_allocation(parent,state,open_plan):
     def label(text):tk.Label(body,text=text,bg=BG,fg=TEXT,wraplength=710,justify='left').pack(anchor='w',pady=6)
     label('Give every available dollar one job')
     label('After living expenses: loans → savings → Roth IRA → remaining money to brokerage. These are your editable priorities, not a universal recommendation.')
-    mode=tk.StringVar(value=prior.get('mode','Future full-time scenario'))
+    mode=tk.StringVar(value=prior.get('mode','Current budget'))
     ttk.Combobox(body,textvariable=mode,values=['Current budget','Future full-time scenario'],state='readonly').pack(fill='x')
     fields={}
-    specs=[('gross','Annual gross salary ($; optional context only)',prior.get('gross','')),('income','Monthly take-home pay after payroll deductions ($)',prior.get('income',sum(f['income'].values()))),('expenses','Monthly living expenses, excluding debt payments ($)',prior.get('expenses',sum(f['spending'].values()))),('loans','Total monthly loans / debt, INCLUDING minimums ($)',prior.get('loans',max(1000,minimums))),('savings','Monthly savings target ($)',prior.get('savings',1000))]
+    specs=[('gross','Annual gross salary ($; optional context only)',prior.get('gross','')),('income','Monthly take-home pay after payroll deductions ($)',prior.get('income',sum(f['income'].values()))),('expenses','Monthly living expenses, excluding debt payments ($)',prior.get('expenses',sum(f['spending'].values()))),('loans','Total monthly loans / debt, INCLUDING minimums ($)',prior.get('loans',minimums)),('savings','Monthly savings target ($)',prior.get('savings',round(max(0,sum(f['income'].values())-sum(f['spending'].values())-minimums)*.1,2)))]
     for key,text,value in specs:
         label(text);var=tk.StringVar(value=str(value));fields[key]=var
         tk.Entry(body,textvariable=var,bg=WHITE,fg=TEXT,insertbackground=TEXT).pack(fill='x',ipady=5)
