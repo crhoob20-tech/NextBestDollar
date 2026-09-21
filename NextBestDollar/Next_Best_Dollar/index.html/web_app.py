@@ -11,6 +11,7 @@ from copy import deepcopy
 from datetime import date
 
 import pandas as pd
+import altair as alt
 import streamlit as st
 
 
@@ -614,21 +615,112 @@ def export_backup(state):
 
 
 def amount(label, value=0.0, **kwargs):
+    """Use whole-number controls for whole-dollar amounts, without .00 noise."""
+    value = money(value, label)
+    if value.is_integer():
+        return st.number_input(label, min_value=0, max_value=int(MAX_MONEY),
+                               value=int(value), step=1, format='%d', **kwargs)
     return st.number_input(label, min_value=0.0, max_value=MAX_MONEY,
-                           value=float(value), step=50.0, **kwargs)
+                           value=value, step=0.01, format='%.2f', **kwargs)
+
+
+def currency(value):
+    return f'${float(value):,.2f}'
+
+
+def goal_progress(goal):
+    target = float(goal['target_amount'])
+    progress = min(target, float(goal['progress_amount']))
+    percent = 0 if target == 0 else round(progress / target * 100)
+    return progress, target, min(100, percent)
+
+
+def goal_progress_bar(goal):
+    progress, target, percent = goal_progress(goal)
+    st.markdown(
+        f'<div class="goal-progress" role="progressbar" aria-valuenow="{percent}" aria-valuemin="0" aria-valuemax="100">'
+        f'<div class="goal-progress-fill" style="width:{percent}%"></div></div>'
+        f'<div class="goal-progress-label">{currency(progress)} saved <span>of {currency(target)}</span></div>',
+        unsafe_allow_html=True,
+    )
+
+
+def money_bar_chart(metrics):
+    data = pd.DataFrame(
+        {'Category': ['Take-home income', 'Living expenses', 'Debt minimums'],
+         'Amount': [metrics['monthly_income'], metrics['monthly_living_spending'], metrics['monthly_debt_minimums']]}
+    )
+    return (
+        alt.Chart(data)
+        .mark_bar(color='#176B58', cornerRadiusEnd=6, size=26)
+        .encode(
+            y=alt.Y('Category:N', sort=['Take-home income', 'Living expenses', 'Debt minimums'], title=None,
+                    axis=alt.Axis(labelFontSize=13, labelPadding=12, ticks=False, domain=False)),
+            x=alt.X('Amount:Q', title=None, axis=alt.Axis(format='$,.2f', grid=True, gridColor='#E1EAE4',
+                    labelFontSize=12, domain=False, tickColor='#D2DED6')),
+            tooltip=[alt.Tooltip('Category:N', title=''), alt.Tooltip('Amount:Q', title='Monthly amount', format='$,.2f')],
+        )
+        .properties(height=230, padding={'left': 8, 'right': 24, 'top': 18, 'bottom': 10})
+        .configure_view(strokeOpacity=0, fill='#FFFFFF')
+        .configure_axis(labelColor='#35534C', titleColor='#35534C')
+    )
+
+
+def forecast_chart(data):
+    plot_data = data.reset_index().melt('Year', var_name='Series', value_name='Amount')
+    return (
+        alt.Chart(plot_data)
+        .mark_line(point=alt.OverlayMarkDef(filled=True, fill='#FFFFFF', size=42), strokeWidth=3)
+        .encode(
+            x=alt.X('Year:Q', title='Year', axis=alt.Axis(tickMinStep=1, labelFontSize=12, titleFontSize=13,
+                    grid=False, domainColor='#D2DED6', tickColor='#D2DED6')),
+            y=alt.Y('Amount:Q', title='Value', axis=alt.Axis(format='$,.2f', labelFontSize=12, titleFontSize=13,
+                    grid=True, gridColor='#E1EAE4', domain=False, tickColor='#D2DED6')),
+            color=alt.Color('Series:N', title=None, scale=alt.Scale(domain=['Balance', 'Contributions'], range=['#176B58', '#7CA9E8']),
+                            legend=alt.Legend(orient='bottom', labelFontSize=13, symbolStrokeWidth=3)),
+            tooltip=[alt.Tooltip('Year:Q', format='.0f'), alt.Tooltip('Series:N', title=''), alt.Tooltip('Amount:Q', title='Value', format='$,.2f')],
+        )
+        .properties(height=360, padding={'left': 12, 'right': 28, 'top': 22, 'bottom': 18})
+        .configure_view(strokeOpacity=0, fill='#FFFFFF')
+        .configure_axis(labelColor='#35534C', titleColor='#35534C')
+        .configure_legend(labelColor='#35534C')
+    )
 
 
 def render_planning(state, page):
     rev = st.session_state.revision
     if page == 'Goals':
+        heading('Your goals', 'Build toward what matters.', 'Choose a milestone, track its progress, and connect each decision to a future you can see.')
+        suggestions = suggested_goals(state)
+        if suggestions:
+            st.subheader('Suggested next goals')
+            st.caption('These prompts come from the financial facts you saved. Review and customize any one before adding it.')
+            for index, suggestion in enumerate(suggestions):
+                with st.container(border=True):
+                    left, right = st.columns([4, 1], vertical_alignment='center')
+                    with left:
+                        st.markdown(f"**{suggestion['name']}**")
+                        st.write(suggestion['reason'])
+                    with right:
+                        if st.button('Customize', key=f'select_suggestion_{index}', width='stretch'):
+                            st.session_state.goal_suggestion = suggestion
+                            st.rerun()
+        selected = st.session_state.get('goal_suggestion', {})
         st.subheader('Your milestones')
         if not state['goals']:
             st.info('Start with one milestone that matters to you. Give it a target and a date when you are ready.')
         for i, goal in enumerate(state['goals']):
-            with st.expander(f"{goal['name']} · {goal_status(goal)}"):
-                st.progress(min(1.0, goal['progress_amount'] / goal['target_amount']))
-                with st.form(f'goal_edit_{rev}_{i}'):
-                    edited_name = st.text_input('Goal name', value=goal['name'])
+            with st.container(border=True):
+                top, status = st.columns([4, 1], vertical_alignment='center')
+                with top:
+                    st.subheader(goal['name'])
+                    st.caption(f"{goal['type']} · {goal['priority']} priority" + (f" · Target {goal['target_date']}" if goal['target_date'] else ''))
+                with status:
+                    st.caption(goal_status(goal))
+                goal_progress_bar(goal)
+                with st.expander('Edit this goal'):
+                    with st.form(f'goal_edit_{rev}_{i}'):
+                        edited_name = st.text_input('Goal name', value=goal['name'])
                     edited_type = st.selectbox('Goal type', TYPES, index=TYPES.index(goal['type']))
                     edited_target = amount('Target amount', goal['target_amount'])
                     edited_progress = amount('Progress so far', goal['progress_amount'])
@@ -649,17 +741,21 @@ def render_planning(state, page):
                         st.error(str(exc))
                     else:
                         st.rerun()
-        with st.form(f'goal_{rev}', clear_on_submit=True):
-            st.write('Add a goal')
-            name = st.text_input('Goal name')
-            kind = st.selectbox('Goal type', TYPES)
-            target = amount('Target amount')
-            progress = amount('Progress so far')
-            due_value = st.date_input('Target date (optional)', value=None)
-            due = due_value.isoformat() if due_value else ''
-            priority = st.selectbox('Priority', ['High', 'Medium', 'Low'], index=1)
-            notes = st.text_area('Notes')
-            if st.form_submit_button('Save goal'):
+        with st.expander('＋ Add a goal', expanded=bool(selected)):
+            with st.form(f'goal_{rev}', clear_on_submit=True):
+                st.write('Add a goal')
+                name = st.text_input('Goal name', value=selected.get('name', ''))
+                kind_default = selected.get('type', TYPES[0])
+                kind = st.selectbox('Goal type', TYPES, index=TYPES.index(kind_default))
+                target = amount('Target amount', selected.get('target_amount') or 0)
+                progress = amount('Progress so far', selected.get('progress_amount', 0))
+                due_value = st.date_input('Target date (optional)', value=None)
+                due = due_value.isoformat() if due_value else ''
+                priority_default = selected.get('priority', 'Medium')
+                priority = st.selectbox('Priority', ['High', 'Medium', 'Low'], index=['High', 'Medium', 'Low'].index(priority_default))
+                notes = st.text_area('Notes', value=selected.get('notes', ''))
+                save_goal = st.form_submit_button('Save goal', type='primary')
+            if save_goal:
                 try:
                     goal = validate_goal(dict(name=name, type=kind, target_amount=target,
                         progress_amount=progress, target_date=due, priority=priority, notes=notes))
@@ -669,6 +765,7 @@ def render_planning(state, page):
                     st.error(str(exc))
                 else:
                     state['goals'].append(goal)
+                    st.session_state.pop('goal_suggestion', None)
                     st.rerun()
     else:
         if not state['financial_complete']:
@@ -718,8 +815,9 @@ def render_planning(state, page):
             rows = project(initial, monthly, years, rate, increase)
             df = pd.DataFrame([(0, initial, 0, initial)] + rows,
                               columns=['Year', 'Contributions', 'Growth', 'Balance']).set_index('Year')
-            st.line_chart(df[['Balance', 'Contributions']], width='stretch')
-            st.metric('Illustrative ending balance', f'${rows[-1][3]:,.2f}')
+            with st.container(border=True):
+                st.altair_chart(forecast_chart(df[['Balance', 'Contributions']]), width='stretch')
+            st.metric('Illustrative ending balance', currency(rows[-1][3]))
             st.caption('Returns are assumptions, not guarantees. Taxes, fees, inflation, withdrawals, and changing contribution limits are not modeled. Employer contributions are excluded.')
             st.download_button('Download forecast CSV', df.to_csv(), 'nextbestdollar-forecast.csv', 'text/csv')
 
