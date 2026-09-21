@@ -628,6 +628,11 @@ def currency(value):
     return f'${float(value):,.2f}'
 
 
+def prose(text):
+    """Render recommendation copy without treating dollar signs as math markup."""
+    st.markdown(str(text).replace('$', '\\$'))
+
+
 def goal_progress(goal):
     target = float(goal['target_amount'])
     progress = min(target, float(goal['progress_amount']))
@@ -700,7 +705,7 @@ def render_planning(state, page):
                     left, right = st.columns([4, 1], vertical_alignment='center')
                     with left:
                         st.markdown(f"**{suggestion['name']}**")
-                        st.write(suggestion['reason'])
+                        prose(suggestion['reason'])
                     with right:
                         if st.button('Customize', key=f'select_suggestion_{index}', width='stretch'):
                             st.session_state.goal_suggestion = suggestion
@@ -982,7 +987,7 @@ def render_overview(state):
         ['After living costs and debt minimums', 'Cash + investments − recorded debt', 'Included in your cash balances']):
         with col:
             with st.container(border=True):
-                st.metric(title, f'${value:,.0f}')
+                st.metric(title, currency(value))
                 st.caption(caption)
     st.subheader('Your next best moves')
     st.caption('Prompts based on the financial facts you saved. You choose the targets and priorities.')
@@ -991,13 +996,13 @@ def render_overview(state):
     for index, suggestion in enumerate(suggested_goals(state)):
         with st.container(border=True):
             st.markdown(f"**{suggestion['name']}**")
-            st.write(suggestion['reason'])
+            prose(suggestion['reason'])
             if st.button('Explore in goals →', key=f'suggestion_{index}'): go('Goals')
     left, right = st.columns([1,1])
     with left:
         with st.container(border=True):
             st.subheader('Your monthly picture')
-            st.bar_chart(pd.DataFrame({'Monthly amount': [m['monthly_income'], m['monthly_living_spending'], m['monthly_debt_minimums']]}, index=['Take-home income','Living expenses','Debt minimums']), color='#176B58', horizontal=True)
+            st.altair_chart(money_bar_chart(m), width='stretch')
             st.caption('A snapshot of your inputs, not a transaction history.')
     with right:
         with st.container(border=True):
@@ -1006,8 +1011,7 @@ def render_overview(state):
                 st.write('A first home. A debt-free date. More room to choose. Start with something that matters to you.')
             for goal in state['goals'][:3]:
                 st.write(goal['name'])
-                st.progress(min(1.0, goal['progress_amount']/goal['target_amount']))
-                st.caption(f"${goal['progress_amount']:,.0f} of ${goal['target_amount']:,.0f}")
+                goal_progress_bar(goal)
             if st.button('Open your goals', width='stretch'): go('Goals')
     with st.container(border=True):
         st.subheader('Make tomorrow more tangible.')
@@ -1019,6 +1023,7 @@ STYLE = '''<style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&display=swap');
 :root{--nbd-ink:#122D2A;--nbd-muted:#596C66;--nbd-green:#176B58}
 .stApp{--text-color:#122D2A;--background-color:#F5F7F3;--secondary-background-color:#FFFFFF;--primary-color:#176B58;background:#F5F7F3;color:var(--nbd-ink);font-family:'DM Sans',sans-serif}
+header[data-testid="stHeader"]{display:none!important}
 h1,h2,h3{font-family:'Manrope',sans-serif!important;letter-spacing:-.035em;color:var(--nbd-ink)}
 h1{font-weight:800!important}p,label,span{font-family:'DM Sans',sans-serif}
 [data-testid="stSidebar"]{background:#112F2A;color:#F1F6F1;border-right:0}
@@ -1035,6 +1040,8 @@ h1{font-weight:800!important}p,label,span{font-family:'DM Sans',sans-serif}
 [data-testid="stMain"] p,[data-testid="stMain"] label{color:#122D2A}
 [data-testid="stMain"] [data-testid="stCaptionContainer"] p{color:#596C66}
 [data-testid="stMain"] input,[data-testid="stMain"] textarea,[data-baseweb="select"]>div,[data-baseweb="input"], [data-baseweb="base-input"]{color:#122D2A!important;background:#FFFFFF!important;border-color:#CBD8D0!important}
+[data-testid="stMain"] input:focus,[data-testid="stMain"] textarea:focus,[data-testid="stMain"] [data-baseweb="select"]:focus-within{outline:3px solid rgba(23,107,88,.24)!important;outline-offset:1px!important;box-shadow:0 0 0 1px #176B58!important;caret-color:#176B58!important}
+[data-testid="stMain"] input{caret-color:#176B58!important}
 [data-baseweb="select"] span,[data-baseweb="select"] input{color:#122D2A!important}
 [data-baseweb="popover"],[data-baseweb="menu"],[role="listbox"],[role="option"]{background:#FFFFFF!important;color:#122D2A!important}
 [data-testid="stMain"] button[kind="secondary"], [data-testid="stMain"] button[kind="secondary"] p{background:#FFFFFF;color:#122D2A}
@@ -1051,6 +1058,7 @@ h1{font-weight:800!important}p,label,span{font-family:'DM Sans',sans-serif}
 .nbd-hero p{color:#D5E7D8;max-width:610px;font-size:16px;line-height:1.6}
 .nbd-eyebrow{font-size:11px;letter-spacing:2px;color:#C7EAB0;font-weight:700}
 .nbd-welcome{padding:3.5rem 0 2rem}.nbd-welcome h1{font-size:clamp(38px,5vw,64px);line-height:1.05;margin:.6rem 0 1.2rem}.nbd-welcome p{font-size:17px;line-height:1.65;max-width:650px}.nbd-welcome img{filter:drop-shadow(0 20px 32px rgba(18,59,52,.16))}
+.goal-progress{width:100%;height:10px;border-radius:999px;background:#DFE8E1;overflow:hidden;margin:12px 0 7px}.goal-progress-fill{height:100%;border-radius:inherit;background:linear-gradient(90deg,#176B58,#58A17B)}.goal-progress-label{font-size:14px;font-weight:700;color:#173D33}.goal-progress-label span{font-weight:400;color:#61736C}
 @media(max-width:640px){[data-testid="stMainBlockContainer"]{padding:1.1rem}.nbd-hero{padding:24px}h1{font-size:30px!important}[data-testid="stHorizontalBlock"]{flex-wrap:wrap}[data-testid="stColumn"]{min-width:100%!important}}
 </style>'''
 
