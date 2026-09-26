@@ -15,6 +15,19 @@ import altair as alt
 import streamlit as st
 
 
+# These are broad, familiar examples to help a first-time investor describe an
+# account. They are not recommendations; the selected ticker only supplies the
+# historical data used for an illustrative forecast.
+FORECAST_ASSETS = {
+    'U.S. total stock market (VTI)': 'VTI',
+    'S&P 500 stocks (VOO)': 'VOO',
+    'Global stock market (VT)': 'VT',
+    'U.S. investment-grade bonds (BND)': 'BND',
+    'Short-term U.S. Treasury bills (SGOV)': 'SGOV',
+    'Enter another ticker': None,
+}
+
+
 # Verbatim from financial.py; source SHA256: 657bda201e2ba5101b70455b04af88af70dab0eb86c25218ccb0a3ab428eb4a8
 CASH_TYPES = {"checking": "Checking", "savings": "Traditional savings", "hysa": "HYSA / money market", "other_cash": "Other liquid cash"}
 
@@ -207,6 +220,45 @@ def project(initial,monthly,years,annual,increase=0,employer=0):
         if month%12==0:
             rows.append((month//12,paid,balance-paid,balance))
     return rows
+
+
+def annualized_return_from_prices(prices):
+    """Return the compounded annual growth rate for dated adjusted prices."""
+    prices = pd.Series(prices).dropna().astype(float)
+    if len(prices) < 2 or prices.iloc[0] <= 0 or prices.iloc[-1] <= 0:
+        raise ValueError('Not enough valid price history is available for this asset.')
+    elapsed_days = (pd.Timestamp(prices.index[-1]) - pd.Timestamp(prices.index[0])).days
+    if elapsed_days < 30:
+        raise ValueError('At least one month of price history is needed for this asset.')
+    elapsed_years = elapsed_days / 365.25
+    annualized = ((prices.iloc[-1] / prices.iloc[0]) ** (1 / elapsed_years) - 1) * 100
+    return round(float(annualized), 2), elapsed_years, pd.Timestamp(prices.index[0]), pd.Timestamp(prices.index[-1])
+
+
+@st.cache_data(ttl=21600, show_spinner=False)
+def historical_asset_return(ticker, lookback_years):
+    """Load a ticker's adjusted prices and calculate its trailing annualized return."""
+    try:
+        import yfinance as yf
+    except ImportError as exc:
+        raise RuntimeError('Historical market data is not installed yet. Run the app setup again.') from exc
+    symbol = str(ticker).strip().upper()
+    if not symbol or len(symbol) > 15 or not all(char.isalnum() or char in '.-' for char in symbol):
+        raise ValueError('Enter a valid market ticker, such as VTI or VOO.')
+    history = yf.Ticker(symbol).history(period='max', auto_adjust=True, raise_errors=False)
+    if history.empty or 'Close' not in history:
+        raise ValueError(f'No price history was found for {symbol}. Check the ticker and try again.')
+    prices = history['Close'].dropna()
+    end = pd.Timestamp(prices.index[-1]).tz_localize(None) if getattr(prices.index[-1], 'tzinfo', None) else pd.Timestamp(prices.index[-1])
+    start_cutoff = end - pd.DateOffset(years=int(lookback_years))
+    dated_prices = prices.copy()
+    dated_prices.index = pd.DatetimeIndex(dated_prices.index).tz_localize(None) if getattr(dated_prices.index, 'tz', None) else pd.DatetimeIndex(dated_prices.index)
+    window = dated_prices[dated_prices.index >= start_cutoff]
+    rate, actual_years, start, finish = annualized_return_from_prices(window)
+    return {
+        'ticker': symbol, 'annual_return': rate, 'years': actual_years,
+        'start': start.date().isoformat(), 'end': finish.date().isoformat(),
+    }
 
 
 # Verbatim from storage.py; source SHA256: 24345f1bccbbe9012373a1472f2159e283012e027c38c13a2faa468a21781952
@@ -692,6 +744,62 @@ def forecast_chart(data):
     )
 
 
+def plan_health(metrics):
+    """Return one plain-language planning focus from saved financial facts."""
+    if metrics['monthly_free_cash_flow'] < 0:
+        return (
+            'Cash flow needs attention',
+            f"Your recorded monthly outflows are {currency(abs(metrics['monthly_free_cash_flow']))} higher than income.",
+            'Review financial facts',
+            'Financial facts',
+        )
+    if metrics['monthly_total_outflow'] and metrics['emergency_fund'] < metrics['monthly_total_outflow']:
+        return (
+            'Build a cash buffer',
+            f"Your emergency reserve is {currency(metrics['emergency_fund'])}; one month of recorded outflows is {currency(metrics['monthly_total_outflow'])}.",
+            'Explore a cash-buffer goal',
+            'Goals',
+        )
+    if metrics['total_debt'] > 0:
+        return (
+            'Choose a debt payoff target',
+            f"You have {currency(metrics['total_debt'])} in recorded debt and {currency(metrics['monthly_debt_minimums'])} in monthly minimum payments.",
+            'Explore debt goals',
+            'Goals',
+        )
+    return (
+        'Turn your monthly surplus into a goal',
+        f"You have {currency(metrics['monthly_free_cash_flow'])} available after recorded living costs and debt minimums.",
+        'Explore your allocation',
+        'My allocation',
+    )
+
+
+def spend_vs_invest_chart(monthly, years, annual_return):
+    investment = project(0, monthly, years, annual_return)[-1][3]
+    data = pd.DataFrame({
+        'Choice': ['Spend today', 'Invest monthly'],
+        'Future invested balance': [0, investment],
+        'Detail': [
+            f'{currency(monthly * years * 12)} directed to spending over {years} years',
+            f'{currency(monthly * years * 12)} contributed; {currency(investment - monthly * years * 12)} illustrative growth',
+        ],
+    })
+    return (
+        alt.Chart(data)
+        .mark_bar(cornerRadiusTopLeft=7, cornerRadiusTopRight=7, size=72)
+        .encode(
+            x=alt.X('Choice:N', title=None, axis=alt.Axis(labelFontSize=13, labelPadding=12, ticks=False, domain=False)),
+            y=alt.Y('Future invested balance:Q', title='Future invested balance', axis=alt.Axis(format='$,.2f', grid=True, gridColor='#E1EAE4', domain=False)),
+            color=alt.Color('Choice:N', legend=None, scale=alt.Scale(domain=['Spend today', 'Invest monthly'], range=['#A9B8B0', '#176B58'])),
+            tooltip=[alt.Tooltip('Choice:N', title=''), alt.Tooltip('Future invested balance:Q', format='$,.2f'), alt.Tooltip('Detail:N', title='')],
+        )
+        .properties(height=280, padding={'left': 12, 'right': 28, 'top': 22, 'bottom': 18})
+        .configure_view(strokeOpacity=0, fill='#FFFFFF')
+        .configure_axis(labelColor='#35534C', titleColor='#35534C')
+    ), investment
+
+
 def render_planning(state, page):
     rev = st.session_state.revision
     if page == 'Goals':
@@ -726,14 +834,14 @@ def render_planning(state, page):
                 with st.expander('Edit this goal'):
                     with st.form(f'goal_edit_{rev}_{i}'):
                         edited_name = st.text_input('Goal name', value=goal['name'])
-                    edited_type = st.selectbox('Goal type', TYPES, index=TYPES.index(goal['type']))
-                    edited_target = amount('Target amount', goal['target_amount'])
-                    edited_progress = amount('Progress so far', goal['progress_amount'])
-                    edited_due = st.date_input('Target date (optional)', value=date.fromisoformat(goal['target_date']) if goal['target_date'] else None)
-                    edited_priority = st.selectbox('Priority', ['High','Medium','Low'], index=['High','Medium','Low'].index(goal['priority']))
-                    edited_notes = st.text_area('Notes', value=goal['notes'])
-                    save_edit = st.form_submit_button('Save goal changes', type='primary')
-                    remove = st.form_submit_button('Remove goal')
+                        edited_type = st.selectbox('Goal type', TYPES, index=TYPES.index(goal['type']))
+                        edited_target = amount('Target amount', goal['target_amount'])
+                        edited_progress = amount('Progress so far', goal['progress_amount'])
+                        edited_due = st.date_input('Target date (optional)', value=date.fromisoformat(goal['target_date']) if goal['target_date'] else None)
+                        edited_priority = st.selectbox('Priority', ['High','Medium','Low'], index=['High','Medium','Low'].index(goal['priority']))
+                        edited_notes = st.text_area('Notes', value=goal['notes'])
+                        save_edit = st.form_submit_button('Save goal changes', type='primary')
+                        remove = st.form_submit_button('Remove goal')
                 if save_edit or remove:
                     try:
                         if remove:
@@ -780,10 +888,23 @@ def render_planning(state, page):
         minimums = metrics['monthly_debt_minimums']
         if page == 'My allocation':
             st.subheader('Give each available dollar a job')
-            st.metric('Monthly cash flow after living expenses and debt minimums', f"${metrics['monthly_free_cash_flow']:,.2f}")
-            st.caption('Existing priority order: debt → savings → Roth IRA → brokerage. These are allocation targets, not transfers or a personalized investment recommendation.')
-            for suggestion in suggested_goals(state):
-                st.info(suggestion['reason'])
+            cash_flow = metrics['monthly_free_cash_flow']
+            st.metric('Monthly cash flow after living expenses and debt minimums', currency(cash_flow))
+            if cash_flow < 0:
+                st.error(
+                    f"Your recorded required costs are {currency(abs(cash_flow))} above your monthly income. "
+                    "Review income, living expenses, or debt minimums before adding savings or investing targets."
+                )
+                st.caption(
+                    "This page does not move money. It shows what the income and costs saved in your profile can cover. "
+                    "With no money left after essentials, new targets stay at $0.00."
+                )
+            else:
+                st.info(
+                    f"You have {currency(cash_flow)} available each month after recorded living expenses and debt minimums. "
+                    "Set targets below to see how that amount could be divided."
+                )
+            st.caption('Priority order: debt → savings → Roth IRA → brokerage. These are planning targets, not transfers or personalized investment advice.')
             loans = amount('Total debt payment INCLUDING minimums', minimums, key=f'loans_{rev}')
             savings = amount('Monthly savings target', key=f'savings_{rev}')
             confirmed = st.checkbox('I have independently verified my Roth eligibility and remaining contribution room', key=f'roth_ok_{rev}')
@@ -798,10 +919,13 @@ def render_planning(state, page):
             except ValueError as exc:
                 st.error(str(exc))
                 return
-            if result['shortfall']:
-                st.warning(f"Requested plan exceeds income by ${result['shortfall']:,.2f}/month. Later priorities receive less funding.")
+            if result['shortfall'] and cash_flow >= 0:
+                st.warning(f"Your selected targets are {currency(result['shortfall'])} above the money available each month. Later priorities receive less funding in this illustration.")
             if result['unfunded_minimums']:
-                st.error(f"Debt minimums are underfunded by ${result['unfunded_minimums']:,.2f}/month.")
+                st.error(
+                    f"Recorded debt minimums total {currency(minimums)} each month. Based on the income and living expenses in your profile, "
+                    f"{currency(result['unfunded_minimums'])} of those minimums is not covered in this illustration."
+                )
             for name, requested, funded in result['rows']:
                 st.metric(name, f'${funded:,.2f}/month')
                 if funded < requested:
@@ -809,13 +933,38 @@ def render_planning(state, page):
             st.caption('Allocation and forecast controls persist during this session. Profile downloads contain financial inputs and goals, not these exploratory scenarios.')
         else:
             st.subheader('Explore a growth scenario')
-            st.caption("See what today's contributions could become. This scenario models one account with contributions at the end of each month.")
+            st.caption("Choose what the account holds, then see what today's contributions could have become using that asset's past return. Contributions are modeled at the end of each month.")
             initial = amount('Starting balance', metrics['total_investments'], key=f'initial_{rev}')
             monthly = amount('Monthly contribution', 0, key=f'monthly_{rev}')
             if monthly > max(0, metrics['monthly_free_cash_flow']):
                 st.warning('This contribution exceeds your recorded monthly surplus.')
             years = st.slider('Years', 1, 60, 10, key=f'years_{rev}')
-            rate = st.number_input('Assumed annual return (%)', min_value=-99.0, max_value=100.0, value=0.0, key=f'rate_{rev}')
+            st.subheader('What does this account hold?')
+            asset_name = st.selectbox('Asset used for the historical return', list(FORECAST_ASSETS), key=f'asset_{rev}')
+            preset_ticker = FORECAST_ASSETS[asset_name]
+            ticker = preset_ticker or st.text_input('Market ticker', placeholder='Example: VTI', key=f'custom_ticker_{rev}').strip().upper()
+            lookback = st.selectbox('Past-performance period', [5, 10, 15], index=1, format_func=lambda value: f'Last {value} years', key=f'lookback_{rev}')
+            rate_data = None
+            if ticker:
+                try:
+                    with st.spinner(f'Looking up {ticker} price history…'):
+                        rate_data = historical_asset_return(ticker, lookback)
+                except (RuntimeError, ValueError) as exc:
+                    st.error(str(exc))
+                except Exception:
+                    st.error('Historical market data is temporarily unavailable. Please try again in a moment.')
+            else:
+                st.info('Choose an asset or enter a ticker to build this forecast from its past performance.')
+            if not rate_data:
+                return
+            rate = rate_data['annual_return']
+            with st.container(border=True):
+                st.metric('Historical annualized return used for this scenario', f'{rate:.2f}%')
+                st.caption(
+                    f"{rate_data['ticker']} from {rate_data['start']} through {rate_data['end']} "
+                    f"({rate_data['years']:.1f} years of adjusted closing-price data)."
+                )
+            st.caption('This is a description of a past period, not a prediction or expected return. Past performance does not guarantee future results.')
             increase = st.number_input('Annual contribution change (%)', min_value=-100.0, max_value=100.0, value=0.0, key=f'increase_{rev}')
             rows = project(initial, monthly, years, rate, increase)
             df = pd.DataFrame([(0, initial, 0, initial)] + rows,
@@ -823,7 +972,22 @@ def render_planning(state, page):
             with st.container(border=True):
                 st.altair_chart(forecast_chart(df[['Balance', 'Contributions']]), width='stretch')
             st.metric('Illustrative ending balance', currency(rows[-1][3]))
-            st.caption('Returns are assumptions, not guarantees. Taxes, fees, inflation, withdrawals, and changing contribution limits are not modeled. Employer contributions are excluded.')
+            st.caption('Taxes, fees, inflation, withdrawals, and changing contribution limits are not modeled. Employer contributions are excluded.')
+            st.subheader('Spend it today or invest it monthly?')
+            st.caption('Compare a monthly choice using the same time horizon and return assumption above. This is an illustration, not a guaranteed outcome.')
+            compare_amount = amount('Monthly amount to compare', 250, key=f'compare_amount_{rev}')
+            comparison_chart, invested_balance = spend_vs_invest_chart(compare_amount, years, rate)
+            comparison_left, comparison_right = st.columns(2)
+            with comparison_left:
+                with st.container(border=True):
+                    st.metric('Spend today', currency(compare_amount * years * 12))
+                    st.caption(f'Directed to spending over {years} years. Future invested balance: {currency(0)}.')
+            with comparison_right:
+                with st.container(border=True):
+                    st.metric('Invest monthly', currency(invested_balance))
+                    st.caption(f'Illustrative ending balance after {years} years using {rate_data["ticker"]}\'s {rate:g}% historical annualized return.')
+            with st.container(border=True):
+                st.altair_chart(comparison_chart, width='stretch')
             st.download_button('Download forecast CSV', df.to_csv(), 'nextbestdollar-forecast.csv', 'text/csv')
 
 
@@ -989,6 +1153,17 @@ def render_overview(state):
             with st.container(border=True):
                 st.metric(title, currency(value))
                 st.caption(caption)
+    focus_title, focus_detail, focus_action, focus_page = plan_health(m)
+    with st.container(border=True):
+        left, right = st.columns([4, 1], vertical_alignment='center')
+        with left:
+            st.caption('YOUR PLAN HEALTH')
+            st.subheader(focus_title)
+            prose(focus_detail)
+            st.caption('This is a planning prompt based on the facts you saved. You remain in control of your targets and decisions.')
+        with right:
+            if st.button(focus_action, key='plan_health_action', width='stretch'):
+                go(focus_page)
     st.subheader('Your next best moves')
     st.caption('Prompts based on the financial facts you saved. You choose the targets and priorities.')
     if m['monthly_free_cash_flow'] < 0:
@@ -1023,7 +1198,10 @@ STYLE = '''<style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&display=swap');
 :root{--nbd-ink:#122D2A;--nbd-muted:#596C66;--nbd-green:#176B58}
 .stApp{--text-color:#122D2A;--background-color:#F5F7F3;--secondary-background-color:#FFFFFF;--primary-color:#176B58;background:#F5F7F3;color:var(--nbd-ink);font-family:'DM Sans',sans-serif}
-header[data-testid="stHeader"]{display:none!important}
+header[data-testid="stHeader"]{display:flex!important;background:#F5F7F3!important;border-bottom:1px solid #E1EAE4!important}
+header[data-testid="stHeader"] [data-testid="stToolbar"]{visibility:visible!important}
+header[data-testid="stHeader"] button{color:#176B58!important;background:#FFFFFF!important;border:1px solid #D3E2D9!important;border-radius:9px!important}
+header[data-testid="stHeader"] button svg{fill:#176B58!important}
 h1,h2,h3{font-family:'Manrope',sans-serif!important;letter-spacing:-.035em;color:var(--nbd-ink)}
 h1{font-weight:800!important}p,label,span{font-family:'DM Sans',sans-serif}
 [data-testid="stSidebar"]{background:#112F2A;color:#F1F6F1;border-right:0}
@@ -1031,12 +1209,17 @@ h1{font-weight:800!important}p,label,span{font-family:'DM Sans',sans-serif}
 [data-testid="stSidebar"] button{background:#20483F;border:1px solid #3D6056;border-radius:12px}
 [data-testid="stSidebar"] button:hover{background:#315E50;border-color:#BFE6AC}
 [data-testid="stSidebar"] [data-testid="stCaptionContainer"]{color:#BDD0C6}
-[data-testid="stMainBlockContainer"]{max-width:1120px;padding-top:2rem;padding-bottom:4rem}
+[data-testid="stMainBlockContainer"]{max-width:1120px;padding-top:5.5rem!important;padding-bottom:4rem}
 [data-testid="stVerticalBlockBorderWrapper"]>div{border-radius:18px!important}
 [data-testid="stForm"], [data-testid="stExpander"]{background:#fff;border-radius:18px;border-color:#DCE5DF}
 [data-testid="stMetricValue"]{font-family:'Manrope',sans-serif;font-weight:800;color:#176B58}
 [data-testid="stBaseButton-primary"]{background:#176B58;border:1px solid #176B58;color:white;border-radius:12px;min-height:46px}
 [data-testid="stBaseButton-secondary"]{border-radius:12px;min-height:42px;border-color:#D3DED6}
+[data-testid="stFormSubmitButton"] button,[data-testid="stFormSubmitButton"] button[kind="primary"]{background:#176B58!important;border:1px solid #176B58!important;color:#FFFFFF!important;border-radius:12px!important;min-height:46px}
+[data-testid="stFormSubmitButton"] button p{color:#FFFFFF!important}
+[data-testid="stNumberInput"] button{background:#EEF5F0!important;border-color:#D3E2D9!important;color:#176B58!important}
+[data-testid="stNumberInput"] button:hover{background:#DCEDE2!important;border-color:#176B58!important}
+[data-testid="stNumberInput"] button svg{fill:#176B58!important}
 [data-testid="stMain"] p,[data-testid="stMain"] label{color:#122D2A}
 [data-testid="stMain"] [data-testid="stCaptionContainer"] p{color:#596C66}
 [data-testid="stMain"] input,[data-testid="stMain"] textarea,[data-baseweb="select"]>div,[data-baseweb="input"], [data-baseweb="base-input"]{color:#122D2A!important;background:#FFFFFF!important;border-color:#CBD8D0!important}
