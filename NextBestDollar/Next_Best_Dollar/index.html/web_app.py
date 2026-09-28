@@ -1248,12 +1248,20 @@ h1{font-weight:800!important}p,label,span{font-family:'DM Sans',sans-serif}
 
 def render_backup(state):
     heading('Your data', 'Keep your progress with you.', 'Download a private copy of your saved profile, then restore it when you return.')
+    is_backup_step = st.session_state.pop('backup_step_needed', False)
+    if is_backup_step:
+        st.success('Your financial profile is complete. One last step: save a private backup before exploring your plan.')
     st.info('Your profile is saved in this browser session. Refreshing, disconnecting, or closing the page can reset it. Download a backup before leaving.')
     with st.container(border=True):
-        st.subheader('Save a profile backup')
-        st.write('Includes saved personal facts, all money-habit answers, financial inputs, and goals. Exploratory allocation and forecast controls are not included.')
+        st.subheader('1. Download your profile backup')
+        st.write('This is the only copy you can use to restore your plan later. It includes saved personal facts, money-habit answers, financial inputs, and goals. Exploratory allocation and forecast controls are not included.')
         st.download_button('Download my profile', export_backup(state), 'nextbestdollar-profile.json', 'application/json', type='primary')
         st.caption('This file contains personal and financial information. Store it somewhere private.')
+    if is_backup_step:
+        st.subheader('2. Continue to your plan')
+        confirmed_backup = st.checkbox('I downloaded my private profile backup', key='confirmed_profile_backup')
+        if st.button('Open my plan', type='primary', disabled=not confirmed_backup):
+            go('Overview')
     with st.container(border=True):
         st.subheader('Pick up where you left off')
         upload = st.file_uploader('Choose your NextBestDollar JSON backup', type=['json'])
@@ -1380,8 +1388,8 @@ def fin_commit(candidate, step=None, complete=False):
     if step is not None:
         st.session_state.fin_step = step
     if complete:
-        st.session_state.page = 'Overview'
-        st.session_state.financial_just_saved = True
+        st.session_state.page = 'Your data'
+        st.session_state.backup_step_needed = True
     st.rerun()
 
 
