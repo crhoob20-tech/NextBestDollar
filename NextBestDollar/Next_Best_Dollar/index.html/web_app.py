@@ -19,8 +19,8 @@ import streamlit as st
 # account. They are not recommendations; the selected ticker only supplies the
 # historical data used for an illustrative forecast.
 FORECAST_ASSETS = {
-    'U.S. total stock market (VTI)': 'VTI',
     'S&P 500 stocks (VOO)': 'VOO',
+    'U.S. total stock market (VTI)': 'VTI',
     'Global stock market (VT)': 'VT',
     'U.S. investment-grade bonds (BND)': 'BND',
     'Short-term U.S. Treasury bills (SGOV)': 'SGOV',
@@ -158,6 +158,22 @@ def allocate(income,expenses,loans,savings,roth,minimums=0):
                 living_expenses_funded=min(income,expenses),unfunded_minimums=max(0,minimums-rows[0][2]))
 
 
+def suggested_allocation(metrics):
+    """Provide an editable, plain-language starting plan from saved facts."""
+    free_cash = max(0.0, float(metrics['monthly_free_cash_flow']))
+    minimums = float(metrics['monthly_debt_minimums'])
+    if metrics['monthly_free_cash_flow'] <= 0:
+        return dict(loans=minimums, savings=0.0, roth=0.0, reason='Your recorded essentials use all available income, so this starting plan keeps targets at required debt payments only.')
+    if metrics['total_debt'] > 0:
+        return dict(loans=minimums + free_cash, savings=0.0, roth=0.0,
+                    reason='Start by covering every required debt payment, then direct the available monthly cash flow to debt. You can change this plan below.')
+    if metrics['monthly_total_outflow'] and metrics['emergency_fund'] < metrics['monthly_total_outflow']:
+        return dict(loans=minimums, savings=free_cash, roth=0.0,
+                    reason='Start by directing the available monthly cash flow to an emergency reserve until you have at least one month of recorded outflows.')
+    return dict(loans=minimums, savings=0.0, roth=0.0,
+                reason='Your recorded essentials and debt minimums are covered. The available amount remains ready for the goals you choose.')
+
+
 # Verbatim from goals.py; source SHA256: d45bbd8f922da1a1ec86b4342500c2281a10c28415dda784c1a7f680ee9df4ba
 TYPES = ['Pay off debt', 'Buy a home', 'Buy a car', 'Invest', 'Vacation', 'Children / family', 'Emergency fund', 'Other milestone']
 
@@ -222,6 +238,158 @@ def project(initial,monthly,years,annual,increase=0,employer=0):
     return rows
 
 
+def project_monthly(initial, monthly, years, annual, increase=0, employer=0):
+    """Return the same compound-growth scenario at monthly intervals for chart hover detail."""
+    if not all(math.isfinite(x) for x in (initial, monthly, years, annual, increase, employer)):
+        raise ValueError('Enter finite numbers.')
+    if increase < -100 or increase > 100 or employer < 0 or initial < 0 or monthly < 0 or years < 1 or years > 60 or years != int(years) or annual <= -100 or annual > 100:
+        raise ValueError('Use nonnegative balances, whole years from 1–60, and an annual return above -100% and at most 100%.')
+    rate = (1 + annual / 100) ** (1 / 12) - 1
+    balance = initial
+    contributed = initial
+    rows = [(0, 0.0, initial, 0.0, initial)]
+    for month in range(1, int(years) * 12 + 1):
+        contribution = (monthly + employer) * (1 + increase / 100) ** ((month - 1) // 12)
+        balance = balance * (1 + rate) + contribution
+        contributed += contribution
+        rows.append((month, month / 12, contributed, balance - contributed, balance))
+    return rows
+
+
+def debt_payoff_projection(balance, monthly_payment, annual_rate):
+    """Model one debt balance using its saved APR and a fixed monthly payment."""
+    if balance < 0 or monthly_payment <= 0 or annual_rate < 0:
+        raise ValueError('Enter a nonnegative balance and APR, plus a payment above $0.')
+    monthly_rate = annual_rate / 100 / 12
+    if monthly_rate and monthly_payment <= balance * monthly_rate:
+        raise ValueError('The payment must be higher than this debt’s monthly interest to pay it down.')
+    remaining = float(balance)
+    paid = 0.0
+    interest_paid = 0.0
+    rows = [(0, remaining)]
+    for month in range(1, 1201):
+        interest = remaining * monthly_rate
+        payment = min(monthly_payment, remaining + interest)
+        remaining = max(0.0, remaining + interest - payment)
+        paid += payment
+        interest_paid += interest
+        rows.append((month, remaining))
+        if remaining == 0:
+            return rows, month, paid, interest_paid
+    raise ValueError('This payoff would take more than 100 years. Increase the monthly payment.')
+
+
+def total_debt_payoff_projection(debts, extra_payment):
+    """Project all recorded debts using minimums plus extra money, highest APR first."""
+    if extra_payment < 0:
+        raise ValueError('Extra debt payment cannot be negative.')
+    active = [
+        {
+            'name': str(debt.get('name', 'Debt')),
+            'balance': float(debt.get('balance', 0)),
+            'minimum': float(debt.get('minimum_payment', 0)),
+            'rate': float(debt.get('apr', 0)) / 100 / 12,
+        }
+        for debt in debts if float(debt.get('balance', 0)) > 0
+    ]
+    if not active:
+        return [(0, 0.0)], 0, 0.0, 0.0
+    if any(item['minimum'] < 0 or item['rate'] < 0 for item in active):
+        raise ValueError('Debt balances, minimums, and APRs must be nonnegative.')
+
+    monthly_budget = sum(item['minimum'] for item in active) + float(extra_payment)
+    if monthly_budget <= 0:
+        raise ValueError('Add a monthly debt payment to create a payoff timeline.')
+
+    total_paid = 0.0
+    interest_paid = 0.0
+    rows = [(0, round(sum(item['balance'] for item in active), 2))]
+    for month in range(1, 1201):
+        for item in active:
+            interest = item['balance'] * item['rate']
+            item['balance'] += interest
+            interest_paid += interest
+
+        payment_left = monthly_budget
+        for item in active:
+            payment = min(item['minimum'], item['balance'], payment_left)
+            item['balance'] -= payment
+            payment_left -= payment
+            total_paid += payment
+
+        for item in sorted(active, key=lambda debt: (-debt['rate'], debt['balance'])):
+            if payment_left <= 0:
+                break
+            payment = min(item['balance'], payment_left)
+            item['balance'] -= payment
+            payment_left -= payment
+            total_paid += payment
+
+        remaining = round(sum(max(0.0, item['balance']) for item in active), 2)
+        rows.append((month, remaining))
+        if remaining <= 0:
+            return rows, month, total_paid, interest_paid
+    raise ValueError('This payoff would take more than 100 years. Increase the monthly debt amount.')
+
+
+def debt_allocation_suggestion(debts, monthly_free_cash):
+    """Suggest a simple highest-APR debt focus after every required payment is covered."""
+    active = [debt for debt in debts if debt.get('balance', 0) > 0]
+    if not active:
+        return None
+    priority = sorted(active, key=lambda debt: (-float(debt.get('apr', 0)), float(debt.get('balance', 0))))[0]
+    return {
+        'priority_debt': priority,
+        'minimums': round(sum(float(debt.get('minimum_payment', 0)) for debt in active), 2),
+        'extra': round(max(0.0, float(monthly_free_cash)), 2),
+    }
+
+
+def debt_payment_plan(debts, extra_payment, method, selected_index=0):
+    """Add a user-chosen extra payment to debts without changing required minimums."""
+    active = [(index, debt) for index, debt in enumerate(debts) if debt.get('balance', 0) > 0]
+    if extra_payment < 0:
+        raise ValueError('Extra debt payment cannot be negative.')
+    extras = {index: 0.0 for index, _ in active}
+    if active and extra_payment:
+        if method == 'Highest APR first':
+            index, _ = sorted(active, key=lambda row: (-float(row[1].get('apr', 0)), float(row[1].get('balance', 0))))[0]
+            extras[index] = extra_payment
+        elif method == 'Split evenly':
+            share = extra_payment / len(active)
+            for index, _ in active:
+                extras[index] = share
+        elif method == 'Selected debt first':
+            if selected_index not in extras:
+                raise ValueError('Choose a debt with a remaining balance.')
+            extras[selected_index] = extra_payment
+        else:
+            raise ValueError('Choose a debt-payment approach.')
+    return [
+        {
+            'name': debt['name'],
+            'minimum': float(debt['minimum_payment']),
+            'extra': round(extras.get(index, 0.0), 2),
+            'payment': round(float(debt['minimum_payment']) + extras.get(index, 0.0), 2),
+        }
+        for index, debt in enumerate(debts)
+    ]
+
+
+def goal_savings_projection(current, target, monthly):
+    """Model a cash goal with no market-return assumption."""
+    if target <= 0 or current < 0 or monthly <= 0:
+        raise ValueError('Enter a target and monthly contribution above $0.')
+    balance = min(float(current), float(target))
+    rows = [(0, balance)]
+    for month in range(1, 1201):
+        balance = min(target, balance + monthly)
+        rows.append((month, balance))
+        if balance >= target:
+            return rows, month
+    raise ValueError('This goal would take more than 100 years. Increase the monthly contribution.')
+
+
 def annualized_return_from_prices(prices):
     """Return the compounded annual growth rate for dated adjusted prices."""
     prices = pd.Series(prices).dropna().astype(float)
@@ -277,6 +445,8 @@ def default_state():
 
         "financial": {},
         "financial_metrics": {},
+        "monthly_checkin": {},
+        "beta_feedback": [],
 
         "goals": [],
         "next_best_actions": [],
@@ -626,9 +796,36 @@ def clean_profile(raw):
         raise ValueError('Goals must be a list with at most 100 entries.')
     if any(not isinstance(g, dict) for g in goals):
         raise ValueError('Every goal must be an object.')
+    feedback = raw.get('beta_feedback', [])
+    if not isinstance(feedback, list) or len(feedback) > 20 or any(not isinstance(item, dict) for item in feedback):
+        raise ValueError('Beta feedback must be a list with at most 20 entries.')
+    clean_feedback = []
+    for item in feedback:
+        rating = item.get('rating')
+        helpful = item.get('helpful')
+        message = item.get('message', '')
+        if rating not in range(1, 6) or helpful not in ('Yes', 'Somewhat', 'No') or not isinstance(message, str) or len(message.strip()) > 3000:
+            raise ValueError('Beta feedback contains an invalid response.')
+        clean_feedback.append({'rating': rating, 'helpful': helpful, 'message': message.strip()})
+    checkin = raw.get('monthly_checkin', {})
+    if not isinstance(checkin, dict):
+        raise ValueError('Monthly check-in must be an object.')
+    checkin_month = checkin.get('month', '')
+    checkin_spending = checkin.get('spending', {})
+    spending_keys = set(f['spending'])
+    if checkin_month and (not isinstance(checkin_month, str) or len(checkin_month) != 7):
+        raise ValueError('Monthly check-in month must use YYYY-MM.')
+    if not isinstance(checkin_spending, dict) or any(str(key) not in spending_keys for key in checkin_spending):
+        raise ValueError('Monthly check-in contains an unsupported spending category.')
+    clean_checkin = {
+        'month': checkin_month,
+        'spending': {str(key): money(value, f'Monthly check-in {key}') for key, value in checkin_spending.items()},
+    }
     state = default_state()
     state['financial'] = f
     state['financial_metrics'] = calculate_metrics(f)
+    state['monthly_checkin'] = clean_checkin
+    state['beta_feedback'] = clean_feedback
     if any(abs(v) > MAX_MONEY for v in state['financial_metrics'].values()):
         raise ValueError('Combined profile totals must not exceed 1 billion.')
     state['goals'] = [validate_goal(g) for g in goals]
@@ -685,6 +882,16 @@ def prose(text):
     st.markdown(str(text).replace('$', '\\$'))
 
 
+def alert_copy(text):
+    """Keep currency readable inside Streamlit alert components."""
+    return str(text).replace('$', '\\$')
+
+
+def safe_caption(text):
+    """Keep currency readable in Streamlit captions instead of math-formatted."""
+    st.caption(str(text).replace('$', '\\$'))
+
+
 def goal_progress(goal):
     target = float(goal['target_amount'])
     progress = min(target, float(goal['progress_amount']))
@@ -712,35 +919,117 @@ def money_bar_chart(metrics):
         .mark_bar(color='#176B58', cornerRadiusEnd=6, size=26)
         .encode(
             y=alt.Y('Category:N', sort=['Take-home income', 'Living expenses', 'Debt minimums'], title=None,
-                    axis=alt.Axis(labelFontSize=13, labelPadding=12, ticks=False, domain=False)),
+                    axis=alt.Axis(labelFontSize=13, labelPadding=14, labelLimit=220, ticks=False, domain=False)),
             x=alt.X('Amount:Q', title=None, axis=alt.Axis(format='$,.2f', grid=True, gridColor='#E1EAE4',
                     labelFontSize=12, domain=False, tickColor='#D2DED6')),
             tooltip=[alt.Tooltip('Category:N', title=''), alt.Tooltip('Amount:Q', title='Monthly amount', format='$,.2f')],
         )
-        .properties(height=230, padding={'left': 8, 'right': 24, 'top': 18, 'bottom': 10})
+        .properties(height=230, padding={'left': 122, 'right': 28, 'top': 18, 'bottom': 14})
+        .configure(background='#FFFFFF')
         .configure_view(strokeOpacity=0, fill='#FFFFFF')
         .configure_axis(labelColor='#35534C', titleColor='#35534C')
     )
 
 
+def spending_breakdown_chart(financial_data):
+    """Show the largest recorded monthly spending categories in a banking-style view."""
+    labels = dict((key, label) for label, key, _ in FIN_SPENDING_FIELDS)
+    rows = [
+        {'Category': labels.get(key, key.replace('_', ' ').title()), 'Amount': float(value)}
+        for key, value in financial_data.get('spending', {}).items() if float(value) > 0
+    ]
+    data = pd.DataFrame(rows)
+    if data.empty:
+        return None
+    return (
+        alt.Chart(data)
+        .mark_bar(color='#7CA9E8', cornerRadiusEnd=6, size=22)
+        .encode(
+            y=alt.Y('Category:N', sort='-x', title=None,
+                    axis=alt.Axis(labelFontSize=13, labelPadding=12, labelLimit=180, ticks=False, domain=False)),
+            x=alt.X('Amount:Q', title=None, axis=alt.Axis(format='$,.2f', grid=True, gridColor='#E1EAE4',
+                    labelFontSize=12, domain=False, tickColor='#D2DED6')),
+            tooltip=[alt.Tooltip('Category:N', title='Category'), alt.Tooltip('Amount:Q', title='Monthly amount', format='$,.2f')],
+        )
+        .properties(height=max(170, min(320, 42 * len(data))), padding={'left': 132, 'right': 28, 'top': 12, 'bottom': 12})
+        .configure(background='#FFFFFF')
+        .configure_view(strokeOpacity=0, fill='#FFFFFF')
+        .configure_axis(labelColor='#35534C', titleColor='#35534C')
+    )
+
+
+def budget_health(metrics, checkin):
+    """Return an understandable score and one useful next budgeting action."""
+    score = 100
+    if metrics['monthly_free_cash_flow'] < 0:
+        score -= 40
+        action = f"Close the {currency(abs(metrics['monthly_free_cash_flow']))} monthly gap before adding a new savings or investing target."
+    elif metrics['emergency_fund_months'] < 1:
+        score -= 25
+        action = 'Build your first month of emergency savings so an unexpected cost does not have to become new debt.'
+    elif metrics['emergency_fund_months'] < 6:
+        score -= 10
+        action = 'Keep building your emergency reserve toward six months of recorded outflows.'
+    else:
+        action = 'Your core monthly plan is covered. Keep checking your actual spending against this budget.'
+
+    planned = metrics['monthly_living_spending']
+    actual = sum(float(value) for value in checkin.get('spending', {}).values())
+    if actual and planned:
+        difference = actual - planned
+        if difference > 0:
+            score -= min(25, int(difference / planned * 100))
+            action = f"Your check-in is {currency(difference)} above plan. Review the categories that changed before the month ends."
+        elif difference < 0:
+            score = min(100, score + 5)
+            action = f"You are {currency(abs(difference))} below your planned spending this month. Decide whether that money supports cash, debt, or a goal."
+    return max(0, score), action, actual
+
+
 def forecast_chart(data):
     plot_data = data.reset_index().melt('Year', var_name='Series', value_name='Amount')
+    base = alt.Chart(plot_data).encode(
+        x=alt.X('Year:Q', title='Years from today', axis=alt.Axis(tickMinStep=1, labelFontSize=12, titleFontSize=13,
+                grid=False, domainColor='#D2DED6', tickColor='#D2DED6')),
+        y=alt.Y('Amount:Q', title='Value', axis=alt.Axis(format='$,.2f', labelFontSize=12, titleFontSize=13,
+                grid=True, gridColor='#E1EAE4', domain=False, tickColor='#D2DED6')),
+        color=alt.Color('Series:N', title=None, scale=alt.Scale(domain=['Balance', 'Contributions'], range=['#176B58', '#7CA9E8']),
+                        legend=alt.Legend(orient='bottom', labelFontSize=13, symbolStrokeWidth=3)),
+    )
+    line = base.mark_line(strokeWidth=3)
+    hover_points = base.mark_circle(size=180, opacity=0).encode(
+        tooltip=[
+            alt.Tooltip('Year:Q', title='Years from today', format='.2f'),
+            alt.Tooltip('Series:N', title=''),
+            alt.Tooltip('Amount:Q', title='Value', format='$,.2f'),
+        ]
+    )
     return (
-        alt.Chart(plot_data)
-        .mark_line(point=alt.OverlayMarkDef(filled=True, fill='#FFFFFF', size=42), strokeWidth=3)
-        .encode(
-            x=alt.X('Year:Q', title='Year', axis=alt.Axis(tickMinStep=1, labelFontSize=12, titleFontSize=13,
-                    grid=False, domainColor='#D2DED6', tickColor='#D2DED6')),
-            y=alt.Y('Amount:Q', title='Value', axis=alt.Axis(format='$,.2f', labelFontSize=12, titleFontSize=13,
-                    grid=True, gridColor='#E1EAE4', domain=False, tickColor='#D2DED6')),
-            color=alt.Color('Series:N', title=None, scale=alt.Scale(domain=['Balance', 'Contributions'], range=['#176B58', '#7CA9E8']),
-                            legend=alt.Legend(orient='bottom', labelFontSize=13, symbolStrokeWidth=3)),
-            tooltip=[alt.Tooltip('Year:Q', format='.0f'), alt.Tooltip('Series:N', title=''), alt.Tooltip('Amount:Q', title='Value', format='$,.2f')],
-        )
+        alt.layer(line, hover_points)
         .properties(height=360, padding={'left': 12, 'right': 28, 'top': 22, 'bottom': 18})
+        .configure(background='#FFFFFF')
         .configure_view(strokeOpacity=0, fill='#FFFFFF')
         .configure_axis(labelColor='#35534C', titleColor='#35534C')
         .configure_legend(labelColor='#35534C')
+    )
+
+
+def goal_timeline_chart(rows, value_label, color='#176B58'):
+    data = pd.DataFrame(rows, columns=['Month', 'Amount'])
+    data['Year'] = data['Month'] / 12
+    base = alt.Chart(data).encode(
+        x=alt.X('Year:Q', title='Years from today', axis=alt.Axis(labelFontSize=12, titleFontSize=13, grid=False, domainColor='#D2DED6')),
+        y=alt.Y('Amount:Q', title=value_label, axis=alt.Axis(format='$,.2f', labelFontSize=12, titleFontSize=13, grid=True, gridColor='#E1EAE4', domain=False)),
+    )
+    return (
+        alt.layer(
+            base.mark_line(color=color, strokeWidth=3),
+            base.mark_circle(size=180, opacity=0).encode(tooltip=[alt.Tooltip('Month:Q', title='Month', format='.0f'), alt.Tooltip('Amount:Q', title=value_label, format='$,.2f')]),
+        )
+        .properties(height=320, padding={'left': 12, 'right': 28, 'top': 22, 'bottom': 18})
+        .configure(background='#FFFFFF')
+        .configure_view(strokeOpacity=0, fill='#FFFFFF')
+        .configure_axis(labelColor='#35534C', titleColor='#35534C')
     )
 
 
@@ -891,10 +1180,10 @@ def render_planning(state, page):
             cash_flow = metrics['monthly_free_cash_flow']
             st.metric('Monthly cash flow after living expenses and debt minimums', currency(cash_flow))
             if cash_flow < 0:
-                st.error(
+                st.error(alert_copy(
                     f"Your recorded required costs are {currency(abs(cash_flow))} above your monthly income. "
                     "Review income, living expenses, or debt minimums before adding savings or investing targets."
-                )
+                ))
                 st.caption(
                     "This page does not move money. It shows what the income and costs saved in your profile can cover. "
                     "With no money left after essentials, new targets stay at $0.00."
@@ -905,90 +1194,310 @@ def render_planning(state, page):
                     "Set targets below to see how that amount could be divided."
                 )
             st.caption('Priority order: debt → savings → Roth IRA → brokerage. These are planning targets, not transfers or personalized investment advice.')
-            loans = amount('Total debt payment INCLUDING minimums', minimums, key=f'loans_{rev}')
-            savings = amount('Monthly savings target', key=f'savings_{rev}')
-            confirmed = st.checkbox('I have independently verified my Roth eligibility and remaining contribution room', key=f'roth_ok_{rev}')
-            roth = 0.0
-            if confirmed:
-                room = amount('Verified remaining Roth room for this tax year', key=f'roth_room_{rev}')
-                months = st.slider('Months to fund this tax-year contribution', 1, 12, 12, key=f'roth_months_{rev}')
-                roth = math.floor(room / months * 100) / 100
-                st.caption(f'Monthly Roth target: ${roth:,.2f}. Stop after the selected months; recheck eligibility and limits each tax year.')
+            recommendation = suggested_allocation(metrics)
+            available_to_assign = max(0, int(math.floor(cash_flow)))
+            savings_key = f'allocation_savings_{rev}'
+            roth_key = f'allocation_roth_{rev}'
+            brokerage_key = f'allocation_brokerage_{rev}'
+            debt_extra_key = f'allocation_debt_extra_{rev}'
+            with st.container(border=True):
+                st.caption('A STARTING PLAN YOU CAN EDIT')
+                prose(recommendation['reason'])
+                plan_debt, plan_savings, plan_left = st.columns(3)
+                plan_debt.metric('Debt payment', f"{currency(recommendation['loans'])}/month")
+                plan_savings.metric('Savings target', f"{currency(recommendation['savings'])}/month")
+                plan_left.metric('Still unassigned', f"{currency(max(0, cash_flow - (recommendation['loans'] - minimums) - recommendation['savings']))}/month")
+                if st.button('Use this starting plan', key=f'use_allocation_plan_{rev}', type='primary'):
+                    st.session_state[savings_key] = int(round(recommendation['savings']))
+                    st.session_state[roth_key] = 0
+                    st.session_state[brokerage_key] = 0
+                    st.session_state[debt_extra_key] = int(round(recommendation['loans'] - minimums))
+                    st.rerun()
+            if available_to_assign:
+                st.subheader('Divide your available money')
+                st.caption('Move these sliders to choose your plan. Each dollar you assign to cash, Roth, or brokerage automatically reduces the amount left for extra debt payoff.')
+                st.session_state.setdefault(savings_key, int(round(recommendation['savings'])))
+                st.session_state[savings_key] = min(max(0, st.session_state[savings_key]), available_to_assign)
+                savings = st.slider('Cash / savings each month', 0, available_to_assign, key=savings_key, step=1)
+                confirmed = st.checkbox('I have independently verified my Roth eligibility and remaining contribution room', key=f'roth_ok_{rev}')
+                remaining_after_savings = available_to_assign - savings
+                roth = 0
+                if confirmed:
+                    st.session_state.setdefault(roth_key, 0)
+                    st.session_state[roth_key] = min(max(0, st.session_state[roth_key]), remaining_after_savings)
+                    roth = st.slider('Roth IRA each month', 0, remaining_after_savings, key=roth_key, step=1)
+                    st.caption('Verify eligibility and contribution limits before transferring money.')
+                remaining_after_savings_and_roth = remaining_after_savings - roth
+                st.session_state.setdefault(brokerage_key, 0)
+                st.session_state[brokerage_key] = min(max(0, st.session_state[brokerage_key]), remaining_after_savings_and_roth)
+                brokerage = st.slider('Brokerage investing each month', 0, remaining_after_savings_and_roth, key=brokerage_key, step=1)
+                remaining_after_brokerage = remaining_after_savings_and_roth - brokerage
+                st.session_state.setdefault(debt_extra_key, int(round(recommendation['loans'] - minimums)))
+                st.session_state[debt_extra_key] = min(max(0, st.session_state[debt_extra_key]), remaining_after_brokerage)
+                extra_debt = st.slider('Extra debt payoff each month', 0, remaining_after_brokerage, key=debt_extra_key, step=1)
+                loans = minimums + extra_debt
+                still_unassigned = remaining_after_brokerage - extra_debt
+                brokerage_total = brokerage + still_unassigned
+                distribution = st.columns(4)
+                distribution[0].metric('Required debt', currency(minimums))
+                distribution[1].metric('Extra debt', currency(extra_debt))
+                distribution[2].metric('Cash / savings', currency(savings))
+                distribution[3].metric('Brokerage investing', currency(brokerage_total))
+                if still_unassigned:
+                    st.caption(f'{currency(still_unassigned)} was not assigned to debt, cash, or Roth, so this illustration adds it to brokerage investing.')
+            else:
+                loans = minimums
+                savings = 0.0
+                roth = 0.0
+                brokerage = 0.0
+                still_unassigned = 0.0
+                brokerage_total = 0.0
+                st.info('There is no flexible money to divide after recorded essentials and debt minimums. Update your financial facts when your situation changes.')
             try:
                 result = allocate(metrics['monthly_income'], metrics['monthly_living_spending'], loans, savings, roth, minimums)
             except ValueError as exc:
                 st.error(str(exc))
                 return
-            if result['shortfall'] and cash_flow >= 0:
-                st.warning(f"Your selected targets are {currency(result['shortfall'])} above the money available each month. Later priorities receive less funding in this illustration.")
             if result['unfunded_minimums']:
-                st.error(
+                st.error(alert_copy(
                     f"Recorded debt minimums total {currency(minimums)} each month. Based on the income and living expenses in your profile, "
                     f"{currency(result['unfunded_minimums'])} of those minimums is not covered in this illustration."
-                )
+                ))
             for name, requested, funded in result['rows']:
                 st.metric(name, f'${funded:,.2f}/month')
                 if funded < requested:
                     st.caption(f'Requested: ${requested:,.2f}')
+            st.subheader('What this plan could do')
+            outcomes = st.columns(3)
+            debts = state['financial'].get('debt', [])
+            if debts and loans > 0:
+                try:
+                    _, payoff_months, _, interest_paid = total_debt_payoff_projection(debts, extra_debt)
+                except ValueError as exc:
+                    outcomes[0].metric('Debt payoff', 'Needs a higher payment')
+                    outcomes[0].caption(str(exc))
+                else:
+                    payoff_date = (pd.Timestamp(date.today()) + pd.DateOffset(months=payoff_months)).strftime('%B %Y')
+                    outcomes[0].metric('Debt-free estimate', f'{payoff_months} months')
+                    with outcomes[0]:
+                        safe_caption(f'About {payoff_date} · estimated interest {currency(interest_paid)}')
+            else:
+                outcomes[0].metric('Debt payoff', 'No recorded debt')
+                with outcomes[0]:
+                    safe_caption('Add a debt in Financial facts to see a payoff estimate.')
+
+            six_month_target = metrics['monthly_total_outflow'] * 6
+            reserve_balance = metrics['emergency_fund']
+            if six_month_target <= reserve_balance:
+                outcomes[1].metric('Six-month reserve', 'Already funded')
+                with outcomes[1]:
+                    safe_caption(f'{currency(reserve_balance)} saved toward {currency(six_month_target)}')
+            elif savings > 0:
+                reserve_months = math.ceil((six_month_target - reserve_balance) / savings)
+                outcomes[1].metric('Six-month reserve', f'{reserve_months} months')
+                with outcomes[1]:
+                    safe_caption(f'{currency(reserve_balance)} today → {currency(six_month_target)} target')
+            else:
+                outcomes[1].metric('Six-month reserve', 'Choose a cash amount')
+                with outcomes[1]:
+                    safe_caption(f'{currency(reserve_balance)} today → {currency(six_month_target)} target')
+
+            current_age = int(state.get('personal', {}).get('age', 25))
+            retirement_ceiling = max(100, current_age + 1)
+            default_retirement_age = min(max(65, current_age + 1), retirement_ceiling)
+            retirement_age = st.slider('Age for brokerage forecast', current_age + 1, retirement_ceiling, default_retirement_age, key=f'allocation_retirement_age_{rev}')
+            years_to_retirement = retirement_age - current_age
+            saved_brokerage = float(state['financial'].get('investments', {}).get('brokerage', 0))
+            brokerage_rows = project(saved_brokerage, brokerage_total, years_to_retirement, 10.0)
+            ending_brokerage = brokerage_rows[-1][3]
+            outcomes[2].metric(f'Brokerage at age {retirement_age}', currency(ending_brokerage))
+            with outcomes[2]:
+                safe_caption(f'{currency(brokerage_total)}/month · 10% long-term S&P 500 planning assumption')
+            st.caption('Debt payoff assumes fixed APRs, no new borrowing, and the highest-APR debt receives the extra payment. The cash target excludes investment returns. Brokerage is an illustration, not a promise; market returns vary and investing can lose value.')
             st.caption('Allocation and forecast controls persist during this session. Profile downloads contain financial inputs and goals, not these exploratory scenarios.')
         else:
-            st.subheader('Explore a growth scenario')
-            st.caption("Choose what the account holds, then see what today's contributions could have become using that asset's past return. Contributions are modeled at the end of each month.")
-            initial = amount('Starting balance', metrics['total_investments'], key=f'initial_{rev}')
-            monthly = amount('Monthly contribution', 0, key=f'monthly_{rev}')
-            if monthly > max(0, metrics['monthly_free_cash_flow']):
-                st.warning('This contribution exceeds your recorded monthly surplus.')
-            years = st.slider('Years', 1, 60, 10, key=f'years_{rev}')
-            st.subheader('What does this account hold?')
-            asset_name = st.selectbox('Asset used for the historical return', list(FORECAST_ASSETS), key=f'asset_{rev}')
-            preset_ticker = FORECAST_ASSETS[asset_name]
-            ticker = preset_ticker or st.text_input('Market ticker', placeholder='Example: VTI', key=f'custom_ticker_{rev}').strip().upper()
-            lookback = st.selectbox('Past-performance period', [5, 10, 15], index=1, format_func=lambda value: f'Last {value} years', key=f'lookback_{rev}')
-            rate_data = None
-            if ticker:
-                try:
-                    with st.spinner(f'Looking up {ticker} price history…'):
-                        rate_data = historical_asset_return(ticker, lookback)
-                except (RuntimeError, ValueError) as exc:
-                    st.error(str(exc))
-                except Exception:
-                    st.error('Historical market data is temporarily unavailable. Please try again in a moment.')
-            else:
-                st.info('Choose an asset or enter a ticker to build this forecast from its past performance.')
-            if not rate_data:
-                return
-            rate = rate_data['annual_return']
-            with st.container(border=True):
-                st.metric('Historical annualized return used for this scenario', f'{rate:.2f}%')
-                st.caption(
-                    f"{rate_data['ticker']} from {rate_data['start']} through {rate_data['end']} "
-                    f"({rate_data['years']:.1f} years of adjusted closing-price data)."
+            heading('Forecast', 'See the next move and the longer view.', 'Start with a goal that needs attention today, or explore how an investment account could grow over time.')
+            focus = st.selectbox('What would you like to explore?', ['Focus on my goals', 'Forecast an account', 'Explore a job or income change'], key=f'forecast_focus_{rev}')
+            if focus == 'Focus on my goals':
+                debt_options = state['financial'].get('debt', [])
+                saved_goals = state.get('goals', [])
+                choices = []
+                if debt_options:
+                    choices.append('Pay off a debt')
+                choices.extend([f"Goal: {goal['name']}" for goal in saved_goals])
+                if not choices:
+                    st.info('Add a goal or record a debt in Financial facts to create a goal-focused forecast.')
+                    return
+                goal_choice = st.selectbox('Which goal should we focus on?', choices, key=f'goal_focus_{rev}')
+                if goal_choice == 'Pay off a debt':
+                    st.subheader('Pay off a debt')
+                    debt_names = [f"{debt['name']} · {currency(debt['balance'])} · {debt['apr']:.2f}% APR" for debt in debt_options]
+                    debt_index = st.selectbox('Debt to project', range(len(debt_options)), format_func=lambda index: debt_names[index], key=f'debt_focus_{rev}')
+                    debt = debt_options[debt_index]
+                    st.caption('This projection uses the balance and APR you saved. It does not use stock-market data.')
+                    debt_plan = debt_allocation_suggestion(debt_options, metrics['monthly_free_cash_flow'])
+                    with st.container(border=True):
+                        st.caption('WHAT CAN YOU RELIABLY PAY RIGHT NOW?')
+                        recorded_cash = max(0.0, metrics['monthly_free_cash_flow'])
+                        if recorded_cash:
+                            prose(f'Your saved profile shows {currency(recorded_cash)} remaining after essential costs and every required debt payment.')
+                        else:
+                            st.write('Your saved profile does not show money left after essential costs and every required debt payment. If school, seasonal work, or another temporary situation makes your income different right now, use an amount you can actually maintain.')
+                        extra_payment = amount('Extra amount you can reliably put toward debt each month', recorded_cash, key=f'debt_extra_{rev}')
+                        payment_method = st.selectbox(
+                            'How should that extra amount be allocated?',
+                            ['Highest APR first', 'Split evenly', 'Selected debt first'],
+                            key=f'debt_method_{rev}',
+                            help='Highest APR first generally reduces interest; the other choices let you follow your own priorities.',
+                        )
+                    try:
+                        payment_plan = debt_payment_plan(debt_options, extra_payment, payment_method, debt_index)
+                    except ValueError as exc:
+                        st.warning(str(exc))
+                        return
+                    selected_plan = payment_plan[debt_index]
+                    with st.container(border=True):
+                        st.caption('YOUR MONTHLY DEBT PLAN')
+                        for plan_row in payment_plan:
+                            detail = f"{plan_row['name']}: {currency(plan_row['payment'])}/month"
+                            if plan_row['extra']:
+                                detail += f" ({currency(plan_row['extra'])} extra)"
+                            prose(detail)
+                        if recorded_cash >= extra_payment:
+                            prose(f'{currency(recorded_cash - extra_payment)} of recorded monthly cash flow remains for other priorities in this illustration.')
+                        elif recorded_cash:
+                            prose(f'This plan uses {currency(extra_payment - recorded_cash)} more than the cash flow currently recorded in your profile.')
+                    payment = selected_plan['payment']
+                    try:
+                        payoff_rows, payoff_months, total_paid, interest_paid = debt_payoff_projection(debt['balance'], payment, debt['apr'])
+                    except ValueError as exc:
+                        st.warning(str(exc))
+                    else:
+                        first, second, third = st.columns(3)
+                        first.metric('Debt-free in', f'{payoff_months} months')
+                        second.metric('Total paid', currency(total_paid))
+                        third.metric('Estimated interest', currency(interest_paid))
+                        with st.container(border=True):
+                            st.altair_chart(goal_timeline_chart(payoff_rows, 'Remaining debt', '#C95B4D'), width='stretch')
+                        st.caption('Illustration only. This assumes a fixed APR, fixed payment, and no new charges, fees, or payment changes.')
+                else:
+                    goal = saved_goals[choices.index(goal_choice) - (1 if debt_options else 0)]
+                    progress, target, _ = goal_progress(goal)
+                    st.subheader(goal['name'])
+                    prose(f"{goal['type']} · {currency(progress)} saved toward a {currency(target)} target. This goal projection does not use stock-market returns.")
+                    monthly_goal = amount('Monthly contribution toward this goal', 0, key=f'goal_contribution_{rev}_{goal_choice}')
+                    if monthly_goal <= 0:
+                        st.info('Enter a monthly contribution to see a goal timeline.')
+                    else:
+                        try:
+                            goal_rows, goal_months = goal_savings_projection(progress, target, monthly_goal)
+                        except ValueError as exc:
+                            st.warning(str(exc))
+                        else:
+                            st.metric('Estimated time to reach this goal', f'{goal_months} months')
+                            with st.container(border=True):
+                                st.altair_chart(goal_timeline_chart(goal_rows, 'Goal balance'), width='stretch')
+            elif focus == 'Forecast an account':
+                st.subheader('Forecast an account')
+                account_options = {
+                    'Brokerage account': ('brokerage', 'A flexible investing account. You can generally access the money when you need it, though taxes can apply to investment income and gains.'),
+                    'Roth IRA': ('ira', 'A retirement account with special tax rules. It can hold investments such as an S&P 500 fund; contribution and eligibility rules still apply.'),
+                    '401(k) or 403(b)': ('retirement_employer', 'An employer retirement account. Your plan chooses the available investments and may include an employer match.'),
+                    'Other investment account': ('other_investments', 'An investment account that does not fit the choices above. Confirm its rules and holdings before making decisions.'),
+                }
+                account_name = st.selectbox('Account type', list(account_options), key=f'forecast_account_{rev}')
+                account_key, account_detail = account_options[account_name]
+                st.info(account_detail)
+                saved_balance = state['financial'].get('investments', {}).get(account_key, 0)
+                st.caption('The account is the container. The investment inside it is what determines historical performance.')
+                initial = amount('Starting balance', saved_balance, key=f'initial_{rev}_{account_key}')
+                monthly = amount('Monthly contribution', 0, key=f'monthly_{rev}_{account_key}')
+                if monthly > max(0, metrics['monthly_free_cash_flow']):
+                    st.warning('This contribution exceeds your recorded monthly surplus.')
+                years = st.slider('Years', 1, 60, 10, key=f'years_{rev}_{account_key}')
+                st.subheader('Return assumption')
+                return_basis = st.selectbox(
+                    'How should this forecast estimate growth?',
+                    ['Long-term S&P 500 average (10%/year)', 'Recent S&P 500 performance', 'Historical return for another asset'],
+                    key=f'return_basis_{rev}_{account_key}',
                 )
-            st.caption('This is a description of a past period, not a prediction or expected return. Past performance does not guarantee future results.')
-            increase = st.number_input('Annual contribution change (%)', min_value=-100.0, max_value=100.0, value=0.0, key=f'increase_{rev}')
-            rows = project(initial, monthly, years, rate, increase)
-            df = pd.DataFrame([(0, initial, 0, initial)] + rows,
-                              columns=['Year', 'Contributions', 'Growth', 'Balance']).set_index('Year')
-            with st.container(border=True):
-                st.altair_chart(forecast_chart(df[['Balance', 'Contributions']]), width='stretch')
-            st.metric('Illustrative ending balance', currency(rows[-1][3]))
-            st.caption('Taxes, fees, inflation, withdrawals, and changing contribution limits are not modeled. Employer contributions are excluded.')
-            st.subheader('Spend it today or invest it monthly?')
-            st.caption('Compare a monthly choice using the same time horizon and return assumption above. This is an illustration, not a guaranteed outcome.')
-            compare_amount = amount('Monthly amount to compare', 250, key=f'compare_amount_{rev}')
-            comparison_chart, invested_balance = spend_vs_invest_chart(compare_amount, years, rate)
-            comparison_left, comparison_right = st.columns(2)
-            with comparison_left:
+                rate_data = None
+                if return_basis == 'Long-term S&P 500 average (10%/year)':
+                    rate = 10.0
+                    with st.container(border=True):
+                        st.metric('Long-term S&P 500 planning assumption', '10.00%')
+                        st.caption('This is a commonly used long-run, before-inflation stock-market planning assumption. It is not a prediction for any one year or decade.')
+                else:
+                    if return_basis == 'Recent S&P 500 performance':
+                        ticker = 'VOO'
+                        st.caption('This uses recent S&P 500 ETF history. Recent performance can be much higher or lower than the long-term average.')
+                    else:
+                        st.caption('Choose another asset only when it matches what this account actually holds.')
+                        asset_name = st.selectbox('Asset used for the historical return', list(FORECAST_ASSETS), key=f'asset_{rev}_{account_key}')
+                        preset_ticker = FORECAST_ASSETS[asset_name]
+                        ticker = preset_ticker or st.text_input('Market ticker', placeholder='Example: VOO', key=f'custom_ticker_{rev}_{account_key}').strip().upper()
+                    lookback = st.selectbox('Past-performance period', [5, 10, 15], index=1, format_func=lambda value: f'Last {value} years', key=f'lookback_{rev}_{account_key}')
+                    if ticker:
+                        try:
+                            with st.spinner(f'Looking up {ticker} price history…'):
+                                rate_data = historical_asset_return(ticker, lookback)
+                        except (RuntimeError, ValueError) as exc:
+                            st.error(str(exc))
+                        except Exception:
+                            st.error('Historical market data is temporarily unavailable. Please try again in a moment.')
+                    if not rate_data:
+                        return
+                    rate = rate_data['annual_return']
+                    with st.container(border=True):
+                        st.metric('Historical annualized return used for this scenario', f'{rate:.2f}%')
+                        st.caption(f"{rate_data['ticker']} from {rate_data['start']} through {rate_data['end']} ({rate_data['years']:.1f} years of adjusted closing-price data).")
                 with st.container(border=True):
-                    st.metric('Spend today', currency(compare_amount * years * 12))
-                    st.caption(f'Directed to spending over {years} years. Future invested balance: {currency(0)}.')
-            with comparison_right:
+                    st.caption('Hover anywhere along the lines below to see the monthly value at that point in the scenario.')
+                st.caption('Returns are estimates, not predictions. Past performance does not guarantee future results.')
+                increase = st.number_input('Annual contribution change (%)', min_value=-100.0, max_value=100.0, value=0.0, key=f'increase_{rev}_{account_key}')
+                rows = project_monthly(initial, monthly, years, rate, increase)
+                df = pd.DataFrame(rows, columns=['Month', 'Year', 'Contributions', 'Growth', 'Balance']).set_index('Year')
                 with st.container(border=True):
-                    st.metric('Invest monthly', currency(invested_balance))
-                    st.caption(f'Illustrative ending balance after {years} years using {rate_data["ticker"]}\'s {rate:g}% historical annualized return.')
-            with st.container(border=True):
-                st.altair_chart(comparison_chart, width='stretch')
-            st.download_button('Download forecast CSV', df.to_csv(), 'nextbestdollar-forecast.csv', 'text/csv')
+                    st.altair_chart(forecast_chart(df[['Balance', 'Contributions']]), width='stretch')
+                st.metric('Illustrative ending balance', currency(rows[-1][4]))
+                st.caption('Taxes, fees, inflation, withdrawals, and changing contribution limits are not modeled. Employer contributions are excluded.')
+                st.download_button('Download forecast CSV', df.to_csv(), 'nextbestdollar-forecast.csv', 'text/csv')
+            else:
+                st.subheader('Explore a job or income change')
+                st.caption('Compare your saved financial picture with a potential role or a change in income. This is a private scenario and does not change your saved profile.')
+                current_primary = state['financial']['income'].get('primary_take_home', 0)
+                annual_salary = amount('Annual salary offered before taxes (optional reference)', 0, key=f'offer_salary_{rev}')
+                if annual_salary:
+                    prose(f'Offer reference: {currency(annual_salary)} per year before taxes, or about {currency(annual_salary / 12)} per month before taxes.')
+                new_take_home = amount('Estimated monthly take-home pay in the new role', current_primary, key=f'new_take_home_{rev}')
+                cost_change = st.number_input(
+                    'Expected change to monthly costs', min_value=-float(MAX_MONEY), max_value=float(MAX_MONEY), value=0.0, step=25.0,
+                    help='Use a positive number for new costs, such as commuting or insurance. Use a negative number if a cost would decrease.',
+                    key=f'job_cost_change_{rev}',
+                )
+                other_income = metrics['monthly_income'] - current_primary
+                projected_income = new_take_home + other_income
+                projected_living = max(0.0, metrics['monthly_living_spending'] + cost_change)
+                projected_outflow = projected_living + minimums
+                projected_cash_flow = projected_income - projected_outflow
+                st.subheader('Your projected monthly picture')
+                current_col, future_col, change_col = st.columns(3)
+                current_col.metric('Current monthly cash flow', currency(metrics['monthly_free_cash_flow']))
+                future_col.metric('Projected monthly cash flow', currency(projected_cash_flow))
+                change_col.metric('Monthly change', currency(projected_cash_flow - metrics['monthly_free_cash_flow']))
+                with st.container(border=True):
+                    st.caption('WHAT CHANGES IN THIS SCENARIO')
+                    prose(f'Projected take-home income: {currency(projected_income)}/month')
+                    prose(f'Projected living costs: {currency(projected_living)}/month')
+                    prose(f'Required debt payments: {currency(minimums)}/month')
+                    if projected_cash_flow > 0 and state['financial'].get('debt'):
+                        plan = debt_allocation_suggestion(state['financial']['debt'], projected_cash_flow)
+                        prose(f'If you chose to use the full projected surplus for debt, {currency(plan["extra"])} could be added to **{plan["priority_debt"]["name"]}** each month after required payments.')
+                    elif projected_cash_flow > 0:
+                        prose(f'You would have {currency(projected_cash_flow)} left after recorded essentials each month to assign to goals, savings, or investing.')
+                    else:
+                        prose(f'This scenario would still be short {currency(abs(projected_cash_flow))} after recorded essentials each month.')
+                st.caption('Use take-home pay rather than the offer salary to make this scenario realistic. Taxes, benefit elections, changing costs, and timing between jobs are not fully modeled.')
 
 
 PERSONAL_CHOICES = {
@@ -1164,30 +1673,106 @@ def render_overview(state):
         with right:
             if st.button(focus_action, key='plan_health_action', width='stretch'):
                 go(focus_page)
+    debt_plan = debt_allocation_suggestion(state['financial'].get('debt', []), m['monthly_free_cash_flow'])
+    if debt_plan:
+        priority_debt = debt_plan['priority_debt']
+        with st.container(border=True):
+            st.caption('DEBT PAYOFF VIEW')
+            st.subheader('Your payment can do more than cover the minimum')
+            if debt_plan['extra'] > 0:
+                prose(
+                    f"Keep {currency(debt_plan['minimums'])}/month across all required debt payments, then consider directing "
+                    f"the {currency(debt_plan['extra'])} left after essentials to **{priority_debt['name']}** ({priority_debt['apr']:.2f}% APR)."
+                )
+                st.caption('This simple illustration focuses extra money on the highest APR debt to reduce interest. You can choose a different priority.')
+            else:
+                st.write(
+                    f"Your recorded required debt payments total {currency(debt_plan['minimums'])}/month. "
+                    "There is no recorded cash left after essentials for an extra debt payment right now."
+                )
+            if st.button('See debt payoff options', key='overview_debt_payoff', width='stretch'):
+                go('Forecast')
     st.subheader('Your next best moves')
     st.caption('Prompts based on the financial facts you saved. You choose the targets and priorities.')
     if m['monthly_free_cash_flow'] < 0:
-        st.warning(f"Your outflows exceed income by ${abs(m['monthly_free_cash_flow']):,.2f} per month. Review your cash flow before adding new contributions.")
+        st.warning(alert_copy(f"Your outflows exceed income by ${abs(m['monthly_free_cash_flow']):,.2f} per month. Review your cash flow before adding new contributions."))
     for index, suggestion in enumerate(suggested_goals(state)):
         with st.container(border=True):
             st.markdown(f"**{suggestion['name']}**")
             prose(suggestion['reason'])
             if st.button('Explore in goals →', key=f'suggestion_{index}'): go('Goals')
-    left, right = st.columns([1,1])
-    with left:
-        with st.container(border=True):
-            st.subheader('Your monthly picture')
-            st.altair_chart(money_bar_chart(m), width='stretch')
-            st.caption('A snapshot of your inputs, not a transaction history.')
-    with right:
-        with st.container(border=True):
-            st.subheader('Goals worth moving toward')
-            if not state['goals']:
-                st.write('A first home. A debt-free date. More room to choose. Start with something that matters to you.')
-            for goal in state['goals'][:3]:
-                st.write(goal['name'])
-                goal_progress_bar(goal)
-            if st.button('Open your goals', width='stretch'): go('Goals')
+    with st.container(border=True):
+        st.subheader('Your monthly picture')
+        st.altair_chart(money_bar_chart(m), width='stretch')
+        st.caption('A snapshot of your saved monthly inputs, not a transaction history.')
+
+    with st.container(border=True):
+        st.caption('BUDGET INSIGHTS')
+        st.subheader('Where your monthly spending is going')
+        spending_labels = {key: label for label, key, _ in FIN_SPENDING_FIELDS}
+        spending_rows = [
+            (spending_labels.get(key, key.replace('_', ' ').title()), float(value))
+            for key, value in state['financial'].get('spending', {}).items() if float(value) > 0
+        ]
+        if spending_rows:
+            largest_name, largest_amount = max(spending_rows, key=lambda row: row[1])
+            discretionary = sum(state['financial']['spending'].get(key, 0) for key in ('dining', 'subscriptions', 'entertainment'))
+            insight_one, insight_two, insight_three = st.columns(3)
+            insight_one.metric('Largest category', currency(largest_amount))
+            with insight_one:
+                safe_caption(largest_name)
+            insight_two.metric('Recurring spending', currency(m['monthly_living_spending']))
+            with insight_two:
+                safe_caption(f"{m['monthly_living_spending'] / m['monthly_income'] * 100:.0f}% of take-home income" if m['monthly_income'] else 'No take-home income recorded')
+            insight_three.metric('Flexible categories', currency(discretionary))
+            with insight_three:
+                safe_caption('Dining, subscriptions, and entertainment')
+            st.altair_chart(spending_breakdown_chart(state['financial']), width='stretch')
+            st.caption('Use Financial facts to update these planned monthly amounts. A later version can add bank-linked transaction history.')
+
+            checkin = state.get('monthly_checkin', {})
+            health_score, health_action, actual_total = budget_health(m, checkin)
+            health_left, health_right = st.columns([1, 3], vertical_alignment='center')
+            with health_left:
+                st.metric('Budget health', f'{health_score}/100')
+            with health_right:
+                st.markdown('**Your next budget action**')
+                prose(health_action)
+                if actual_total:
+                    safe_caption(f"This month's check-in: {currency(actual_total)} actual spending compared with {currency(m['monthly_living_spending'])} planned.")
+
+            with st.expander('Check in on this month’s actual spending'):
+                st.write('Enter what you have actually spent so far this month. This does not change your planned budget.')
+                recorded = checkin.get('spending', {}) if checkin.get('month') else {}
+                actual_entries = {}
+                with st.form('monthly_spending_checkin'):
+                    for label, key, _ in FIN_SPENDING_FIELDS:
+                        actual_entries[key] = amount(
+                            f'Actual: {label}',
+                            recorded.get(key, 0),
+                            key=f'checkin_{st.session_state.revision}_{key}',
+                        )
+                    submitted = st.form_submit_button('Save this month’s check-in', type='primary')
+                if submitted:
+                    updated = deepcopy(state)
+                    updated['monthly_checkin'] = {
+                        'month': date.today().strftime('%Y-%m'),
+                        'spending': actual_entries,
+                    }
+                    st.session_state.profile = clean_profile(updated)
+                    st.success('Monthly check-in saved. Your budget insights are updated.')
+                    st.rerun()
+        else:
+            st.info('Add monthly spending categories in Financial facts to see your budgeting insights.')
+
+    with st.container(border=True):
+        st.subheader('Goals worth moving toward')
+        if not state['goals']:
+            st.write('A first home. A debt-free date. More room to choose. Start with something that matters to you.')
+        for goal in state['goals'][:3]:
+            st.write(goal['name'])
+            goal_progress_bar(goal)
+        if st.button('Open your goals', width='stretch'): go('Goals')
     with st.container(border=True):
         st.subheader('Make tomorrow more tangible.')
         st.write('Explore how a monthly contribution and time can change the future. Every forecast makes its assumptions visible.')
@@ -1277,6 +1862,73 @@ def render_backup(state):
                 go('Overview' if restored['onboarding_complete'] else 'Personal facts')
 
 
+def render_guide():
+    heading('About NextBestDollar', 'A clearer decision today. More possibility tomorrow.',
+            'NextBestDollar helps you connect everyday money choices with the future you want to build.')
+    with st.container(border=True):
+        st.subheader('Why it exists')
+        st.write('Money tools often show numbers without helping people see what those numbers mean. NextBestDollar starts with your real situation, gives each available dollar a purpose, and makes the tradeoffs visible.')
+        st.write('It is built to support learning and planning. You remain in control of every target and decision.')
+    with st.container(border=True):
+        st.subheader('How to use the app')
+        st.markdown('''1. Complete **Personal facts**, **Money habits**, and **Financial facts**.
+2. Download a private profile backup.
+3. Use **Overview** to understand your monthly picture and check in on actual spending.
+4. Use **Goals**, **My allocation**, and **Forecast** to explore what different choices could make possible.''')
+    with st.container(border=True):
+        st.subheader('What each part does')
+        st.markdown('''- **Overview:** monthly cash flow, spending insights, budget health, and goals.
+- **Goals:** milestones such as emergency savings, debt payoff, travel, or a home.
+- **My allocation:** an editable monthly split between cash, debt payoff, retirement, and brokerage investing.
+- **Forecast:** debt, investment-account, and job-income scenarios.''')
+    with st.container(border=True):
+        st.subheader('Your data and privacy')
+        st.write('NextBestDollar does not currently create accounts, connect to a bank, or use a cloud database. Your information stays in the current browser session. Downloaded backups contain personal and financial information, so store them privately.')
+    with st.container(border=True):
+        st.subheader('Beta feedback')
+        st.write('Use Beta feedback in the sidebar to rate the app and tell us what helped, confused, or felt missing. You can download a feedback-only file to share without including your financial profile.')
+    with st.container(border=True):
+        st.subheader('Planning assumptions and limits')
+        st.write('Debt illustrations assume fixed APRs, payments, and no new borrowing. Investment illustrations use a 10% long-term S&P 500 planning assumption by default. It is not a prediction, and markets can lose value.')
+        st.caption('NextBestDollar is an educational planning tool, not tax, legal, investment, credit, or individualized financial advice.')
+
+
+def render_beta_feedback(state):
+    heading('Beta feedback', 'Help shape what comes next.',
+            'Tell us what felt helpful, confusing, or missing. Your feedback stays on this device until you download and share it.')
+    with st.container(border=True):
+        st.subheader('Share your experience')
+        with st.form('beta_feedback_form', clear_on_submit=True):
+            rating = st.radio('How would you rate the app so far?', [1, 2, 3, 4, 5], horizontal=True,
+                              format_func=lambda value: f'{value} / 5')
+            helpful = st.selectbox('Did NextBestDollar help you understand your next financial move?', ['Yes', 'Somewhat', 'No'])
+            message = st.text_area('What should we keep, improve, or add?', max_chars=3000,
+                                   placeholder='For example: The allocation sliders helped me see what a larger debt payment would change.')
+            submitted = st.form_submit_button('Save my feedback', type='primary')
+        if submitted:
+            updated = deepcopy(state)
+            updated['beta_feedback'] = [
+                *updated.get('beta_feedback', []),
+                {'rating': rating, 'helpful': helpful, 'message': message.strip()},
+            ][-20:]
+            st.session_state.profile = clean_profile(updated)
+            st.success('Thanks — your feedback is saved on this device.')
+            st.rerun()
+    saved_feedback = state.get('beta_feedback', [])
+    if saved_feedback:
+        with st.container(border=True):
+            st.subheader('Download feedback to share')
+            st.write('Download this small feedback-only file and send it through the beta channel you were given. It does not include your financial profile.')
+            st.download_button(
+                'Download my beta feedback',
+                json.dumps({'format': 'nextbestdollar-beta-feedback', 'version': 1, 'feedback': saved_feedback}, indent=2),
+                'nextbestdollar-beta-feedback.json',
+                'application/json',
+                type='primary',
+            )
+            st.caption(f'{len(saved_feedback)} feedback response{"s" if len(saved_feedback) != 1 else ""} saved on this device.')
+
+
 def render_welcome(state):
     st.markdown('<div class="nbd-welcome">', unsafe_allow_html=True)
     left, right = st.columns([1.2, 0.8], vertical_alignment='center')
@@ -1339,6 +1991,8 @@ def main():
         st.progress(completed/3, text=f'{completed} of 3 profile sections saved')
         st.divider()
         if st.button('Save & restore profile', width='stretch'): go('Your data')
+        if st.button('About this app', width='stretch'): go('About this app')
+        if st.button('Beta feedback', width='stretch'): go('Beta feedback')
         st.caption('Make the next dollar easier to allocate intelligently. Plan forward, learn why, and move toward what matters.')
         st.caption('BETA · Session storage · No account linking')
     page = st.session_state.page
@@ -1350,6 +2004,8 @@ def main():
     elif page == 'Financial facts': render_financial(state)
     elif page == 'Overview': render_overview(state)
     elif page == 'Your data': render_backup(state)
+    elif page == 'About this app': render_guide()
+    elif page == 'Beta feedback': render_beta_feedback(state)
     else: render_planning(state, page)
     st.divider()
     st.caption('NextBestDollar · A clearer decision today. More possibility tomorrow.   |   Save a backup before you leave.')
