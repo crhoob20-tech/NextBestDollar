@@ -9,6 +9,7 @@ import json
 import math
 from copy import deepcopy
 from datetime import date
+from pathlib import Path
 
 import pandas as pd
 import altair as alt
@@ -1947,7 +1948,7 @@ def render_welcome(state):
             go(destination)
         st.caption('Your profile stays in this browser session. You can download a private backup whenever you want.')
     with right:
-        st.image('assets/nextbestdollar-icon.png', width=220)
+        st.image(Path(__file__).resolve().parent / 'assets' / 'nextbestdollar-icon.png', width=220)
     st.markdown('</div>', unsafe_allow_html=True)
     st.divider()
     first, second, third = st.columns(3)
