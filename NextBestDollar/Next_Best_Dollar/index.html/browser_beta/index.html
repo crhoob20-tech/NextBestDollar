@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="NextBestDollar browser-only financial planning beta." />
+    <title>NextBestDollar — Your money, moving forward</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">Skip to content</a>
+    <div class="app-shell">
+      <aside class="sidebar" aria-label="NextBestDollar navigation">
+        <a class="brand" href="#overview" data-page-link="overview" aria-label="NextBestDollar home">
+          <span>NextBest<span>Dollar</span> ↗</span>
+          <small>Your money, moving forward</small>
+        </a>
+        <nav class="nav-links" aria-label="Your plan">
+          <p>Your plan</p>
+          <button class="nav-link active" data-page="overview">Overview</button>
+          <button class="nav-link" data-page="goals">Goals</button>
+          <button class="nav-link" data-page="allocation">My allocation</button>
+          <button class="nav-link" data-page="forecast">Forecast</button>
+        </nav>
+        <nav class="nav-links secondary" aria-label="Your foundation">
+          <p>Your foundation</p>
+          <button class="nav-link" data-page="setup">Financial picture</button>
+          <button class="nav-link" data-page="guide">About this app</button>
+          <button class="nav-link" data-page="feedback">Beta feedback</button>
+        </nav>
+        <p class="privacy-note">Your plan stays on this device.</p>
+      </aside>
+      <main id="main-content" class="content">
+        <header class="topbar">
+          <button class="mobile-menu" aria-label="Open menu">☰</button>
+          <span>Browser-only beta</span>
+          <button id="backup-button" class="button secondary-button">Download backup</button>
+        </header>
+
+        <section id="page-overview" class="page active"></section>
+        <section id="page-setup" class="page"></section>
+        <section id="page-goals" class="page"></section>
+        <section id="page-allocation" class="page"></section>
+        <section id="page-forecast" class="page"></section>
+        <section id="page-guide" class="page"></section>
+        <section id="page-feedback" class="page"></section>
+      </main>
+    </div>
+    <input id="restore-input" type="file" accept="application/json" hidden />
+    <script src="app.js"></script>
+  </body>
+</html>

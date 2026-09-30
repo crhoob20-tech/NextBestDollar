@@ -1,0 +1,37 @@
+name: Publish browser beta
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "NextBestDollar/Next_Best_Dollar/index.html/browser_beta/**"
+      - ".github/workflows/publish-browser-beta.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v6
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+      - name: Upload the browser beta
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: "NextBestDollar/Next_Best_Dollar/index.html/browser_beta"
+      - name: Publish the browser beta
+        id: deployment
+        uses: actions/deploy-pages@v4
