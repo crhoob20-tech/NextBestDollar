@@ -7,6 +7,8 @@ Session memory is private per browser connection; JSON export/import restores it
 """
 import json
 import math
+import os
+from urllib.parse import urlparse
 from copy import deepcopy
 from datetime import date
 from pathlib import Path
@@ -1226,16 +1228,16 @@ def render_planning(state, page):
                 if confirmed:
                     st.session_state.setdefault(roth_key, 0)
                     st.session_state[roth_key] = min(max(0, st.session_state[roth_key]), remaining_after_savings)
-                    roth = st.slider('Roth IRA each month', 0, remaining_after_savings, key=roth_key, step=1)
+                    roth = st.slider('Roth IRA each month', 0, remaining_after_savings, key=roth_key, step=1) if remaining_after_savings > 0 else 0
                     st.caption('Verify eligibility and contribution limits before transferring money.')
                 remaining_after_savings_and_roth = remaining_after_savings - roth
                 st.session_state.setdefault(brokerage_key, 0)
                 st.session_state[brokerage_key] = min(max(0, st.session_state[brokerage_key]), remaining_after_savings_and_roth)
-                brokerage = st.slider('Brokerage investing each month', 0, remaining_after_savings_and_roth, key=brokerage_key, step=1)
+                brokerage = st.slider('Brokerage investing each month', 0, remaining_after_savings_and_roth, key=brokerage_key, step=1) if remaining_after_savings_and_roth > 0 else 0
                 remaining_after_brokerage = remaining_after_savings_and_roth - brokerage
                 st.session_state.setdefault(debt_extra_key, int(round(recommendation['loans'] - minimums)))
                 st.session_state[debt_extra_key] = min(max(0, st.session_state[debt_extra_key]), remaining_after_brokerage)
-                extra_debt = st.slider('Extra debt payoff each month', 0, remaining_after_brokerage, key=debt_extra_key, step=1)
+                extra_debt = st.slider('Extra debt payoff each month', 0, remaining_after_brokerage, key=debt_extra_key, step=1) if remaining_after_brokerage > 0 else 0
                 loans = minimums + extra_debt
                 still_unassigned = remaining_after_brokerage - extra_debt
                 brokerage_total = brokerage + still_unassigned
@@ -1247,6 +1249,7 @@ def render_planning(state, page):
                 if still_unassigned:
                     st.caption(f'{currency(still_unassigned)} was not assigned to debt, cash, or Roth, so this illustration adds it to brokerage investing.')
             else:
+                extra_debt = 0.0
                 loans = minimums
                 savings = 0.0
                 roth = 0.0
@@ -1304,9 +1307,10 @@ def render_planning(state, page):
                     safe_caption(f'{currency(reserve_balance)} today → {currency(six_month_target)} target')
 
             current_age = int(state.get('personal', {}).get('age', 25))
-            retirement_ceiling = max(100, current_age + 1)
+            retirement_ceiling = min(100, current_age + 60)
+            retirement_ceiling = max(retirement_ceiling, current_age + 1)
             default_retirement_age = min(max(65, current_age + 1), retirement_ceiling)
-            retirement_age = st.slider('Age for brokerage forecast', current_age + 1, retirement_ceiling, default_retirement_age, key=f'allocation_retirement_age_{rev}')
+            retirement_age = st.slider('Age for brokerage forecast', current_age + 1, retirement_ceiling, default_retirement_age, key=f'allocation_retirement_age_{rev}') if retirement_ceiling > current_age + 1 else current_age + 1
             years_to_retirement = retirement_age - current_age
             saved_brokerage = float(state['financial'].get('investments', {}).get('brokerage', 0))
             brokerage_rows = project(saved_brokerage, brokerage_total, years_to_retirement, 10.0)
@@ -1401,6 +1405,9 @@ def render_planning(state, page):
             elif focus == 'Forecast an account':
                 st.subheader('Forecast an account')
                 account_options = {
+                    'High-yield savings': ('hysa', 'Cash savings. Enter the actual account rate as a custom assumption.'),
+                    'Savings': ('savings', 'Cash set aside for a goal.'),
+                    'Health savings account': ('hsa', 'Check eligibility and distinguish cash from investments.'),
                     'Brokerage account': ('brokerage', 'A flexible investing account. You can generally access the money when you need it, though taxes can apply to investment income and gains.'),
                     'Roth IRA': ('ira', 'A retirement account with special tax rules. It can hold investments such as an S&P 500 fund; contribution and eligibility rules still apply.'),
                     '401(k) or 403(b)': ('retirement_employer', 'An employer retirement account. Your plan chooses the available investments and may include an employer match.'),
@@ -1409,7 +1416,7 @@ def render_planning(state, page):
                 account_name = st.selectbox('Account type', list(account_options), key=f'forecast_account_{rev}')
                 account_key, account_detail = account_options[account_name]
                 st.info(account_detail)
-                saved_balance = state['financial'].get('investments', {}).get(account_key, 0)
+                saved_balance = state['financial'].get('accounts' if account_key in CASH_TYPES else 'investments', {}).get(account_key, 0)
                 st.caption('The account is the container. The investment inside it is what determines historical performance.')
                 initial = amount('Starting balance', saved_balance, key=f'initial_{rev}_{account_key}')
                 monthly = amount('Monthly contribution', 0, key=f'monthly_{rev}_{account_key}')
@@ -1419,11 +1426,13 @@ def render_planning(state, page):
                 st.subheader('Return assumption')
                 return_basis = st.selectbox(
                     'How should this forecast estimate growth?',
-                    ['Long-term S&P 500 average (10%/year)', 'Recent S&P 500 performance', 'Historical return for another asset'],
+                    ['Custom annual return / savings rate', 'Long-term S&P 500 average (10%/year)', 'Recent S&P 500 performance', 'Historical return for another asset'],
                     key=f'return_basis_{rev}_{account_key}',
                 )
                 rate_data = None
-                if return_basis == 'Long-term S&P 500 average (10%/year)':
+                if return_basis == 'Custom annual return / savings rate':
+                    rate = st.number_input('Annual return / savings rate (%)', min_value=-99.99, max_value=100.0, value=0.0, key=f'rate_{rev}_{account_key}')
+                elif return_basis == 'Long-term S&P 500 average (10%/year)':
                     rate = 10.0
                     with st.container(border=True):
                         st.metric('Long-term S&P 500 planning assumption', '10.00%')
@@ -1456,12 +1465,13 @@ def render_planning(state, page):
                     st.caption('Hover anywhere along the lines below to see the monthly value at that point in the scenario.')
                 st.caption('Returns are estimates, not predictions. Past performance does not guarantee future results.')
                 increase = st.number_input('Annual contribution change (%)', min_value=-100.0, max_value=100.0, value=0.0, key=f'increase_{rev}_{account_key}')
-                rows = project_monthly(initial, monthly, years, rate, increase)
+                employer = amount('Monthly employer contribution', 0, key=f'employer_{rev}_{account_key}') if account_key == 'retirement_employer' else 0.0
+                rows = project_monthly(initial, monthly, years, rate, increase, employer)
                 df = pd.DataFrame(rows, columns=['Month', 'Year', 'Contributions', 'Growth', 'Balance']).set_index('Year')
                 with st.container(border=True):
                     st.altair_chart(forecast_chart(df[['Balance', 'Contributions']]), width='stretch')
                 st.metric('Illustrative ending balance', currency(rows[-1][4]))
-                st.caption('Taxes, fees, inflation, withdrawals, and changing contribution limits are not modeled. Employer contributions are excluded.')
+                st.caption('Taxes, fees, inflation, withdrawals, and changing contribution limits are not modeled. Employer contributions are included only when entered above.')
                 st.download_button('Download forecast CSV', df.to_csv(), 'nextbestdollar-forecast.csv', 'text/csv')
             else:
                 st.subheader('Explore a job or income change')
@@ -1897,6 +1907,14 @@ def render_guide():
 def render_beta_feedback(state):
     heading('Beta feedback', 'Help shape what comes next.',
             'Tell us what felt helpful, confusing, or missing. Your feedback stays on this device until you download and share it.')
+    form_url = os.environ.get('NBD_FEEDBACK_FORM_URL', '').strip()
+    if form_url:
+        parsed = urlparse(form_url)
+        if parsed.scheme == 'https' and (parsed.hostname == 'forms.gle' or (parsed.hostname == 'docs.google.com' and parsed.path.startswith('/forms/'))):
+            st.link_button('Send feedback through Google Forms', form_url)
+            st.caption('Google Forms opens separately. Only information you choose to submit there is sent; your profile is not attached.')
+        else:
+            st.warning('Feedback form configuration must be an HTTPS Google Forms URL.')
     with st.container(border=True):
         st.subheader('Share your experience')
         with st.form('beta_feedback_form', clear_on_submit=True):
@@ -1976,7 +1994,7 @@ def main():
     st.session_state.setdefault('page', 'Overview' if st.session_state.profile.get('onboarding_complete') else 'Welcome')
     # Retain in-progress answers when navigating between views in this session.
     for key in list(st.session_state):
-        if key.startswith(('personal_', 'behavior_', 'loans_', 'savings_', 'roth_', 'initial_', 'monthly_', 'years_', 'rate_', 'increase_')):
+        if key.startswith(('personal_', 'behavior_', 'loans_', 'savings_', 'roth_', 'initial_', 'monthly_', 'years_', 'rate_', 'increase_', 'allocation_', 'forecast_', 'employer_', 'return_basis_', 'asset_', 'lookback_', 'custom_ticker_', 'roth_ok_', 'goal_focus_', 'debt_focus_', 'debt_extra_', 'debt_method_', 'goal_contribution_', 'offer_salary_', 'new_take_home_', 'job_cost_change_')):
             st.session_state[key] = st.session_state[key]
     state = st.session_state.profile
     with st.sidebar:

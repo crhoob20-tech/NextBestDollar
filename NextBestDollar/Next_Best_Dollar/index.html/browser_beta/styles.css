@@ -95,3 +95,8 @@ textarea { min-height: 100px; resize: vertical; }
   .card-grid, .field-grid, .two-col { grid-template-columns: 1fr; }
   .bar-row { grid-template-columns: 105px minmax(0, 1fr) 78px; gap: .45rem; }
 }
+
+/* Full questionnaire and account editors */
+.field-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:1rem}.field-grid label{display:flex;flex-direction:column;gap:.4rem}.field-grid input,.field-grid select{width:100%;min-width:0;padding:.7rem;border:1px solid #ccd8d2;border-radius:8px;background:#fff;color:#172d26}.account-row{padding:1rem 0;border-bottom:1px solid #dce5df}.rating{display:flex;gap:1.5rem;flex-wrap:wrap}.rating label{display:flex;gap:.4rem;align-items:center}fieldset.card{min-width:0}fieldset legend{font-weight:600;max-width:100%;padding:.5rem}.line-chart{width:100%;height:auto;overflow:visible}.table-wrap{overflow-x:auto}.status,#app-notice{color:#9b3c24}progress{width:100%;accent-color:#16745f}.page .card{min-width:0}.bar-row{display:grid;grid-template-columns:minmax(100px,1fr) 2fr auto;gap:.7rem;align-items:center;margin:.8rem 0}.bar-track{background:#e8efe9;height:12px;border-radius:8px;overflow:hidden}.bar{height:100%;background:#16745f}.small{font-size:.85rem}.button-row{margin:1rem 0}@media(max-width:600px){.field-grid{grid-template-columns:1fr}.bar-row{grid-template-columns:1fr 1fr}.bar-row>span:last-child{grid-column:2}.rating{gap:.7rem}.table{font-size:.85rem}}
+
+.privacy-note a{color:#d4edb5}#app-notice{color:#176b58;margin:1rem 1.1rem}.status{color:#9b3c24}

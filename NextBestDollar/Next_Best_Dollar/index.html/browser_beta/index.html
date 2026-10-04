@@ -24,11 +24,13 @@
         </nav>
         <nav class="nav-links secondary" aria-label="Your foundation">
           <p>Your foundation</p>
-          <button class="nav-link" data-page="setup">Budget & profile</button>
+          <button class="nav-link" data-page="personal">Personal facts</button>
+          <button class="nav-link" data-page="behavioral">Money habits</button>
+          <button class="nav-link" data-page="setup">Financial facts</button>
           <button class="nav-link" data-page="guide">About this app</button>
           <button class="nav-link" data-page="feedback">Beta feedback</button>
         </nav>
-        <p class="privacy-note">Your plan stays on this device.</p>
+        <p class="privacy-note">Your plan stays on this device. <a href="terms.html">Terms &amp; privacy</a></p>
       </aside>
       <main id="main-content" class="content">
         <header class="topbar">
@@ -37,6 +39,9 @@
           <button id="backup-button" class="button secondary-button">Download backup</button>
         </header>
 
+        <p id="app-notice" role="status" aria-live="polite"></p>
+        <section id="page-personal" class="page"></section>
+        <section id="page-behavioral" class="page"></section>
         <section id="page-overview" class="page active"></section>
         <section id="page-setup" class="page"></section>
         <section id="page-goals" class="page"></section>
@@ -47,6 +52,8 @@
       </main>
     </div>
     <input id="restore-input" type="file" accept="application/json" hidden />
+    <script src="config.js"></script>
     <script src="app.js"></script>
+    <script src="terms.js"></script>
   </body>
 </html>
