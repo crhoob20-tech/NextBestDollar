@@ -26,11 +26,13 @@
   display: grid;
   grid-template-rows: minmax(2.8em, auto) 48px;
   align-content: end;
+  gap: .45rem;
 }
 
 .field-grid > label > input,
 .field-grid > label > select {
   height: 48px;
+  margin: 0;
 }
 
 #goal-form .field-grid > label,
@@ -39,29 +41,71 @@
   min-height: 92px;
 }
 
+/* Money Habits: keep every question inside a clean, even card. */
 #behavior-form {
   display: grid;
-  gap: 1.25rem;
+  gap: 1rem;
+  margin-top: 1.35rem;
 }
 
 #behavior-form fieldset.card {
-  min-height: 132px;
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
-  margin-top: 0;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  min-height: 148px;
+  margin: 0;
+  padding: 1.35rem 1.5rem;
+  border: 0;
+  border-radius: 18px;
+  background: #fff;
+  box-shadow: 0 0 0 1px var(--line), 0 10px 28px rgba(20, 62, 50, .035);
+  display: grid;
+  grid-template-rows: minmax(3.4rem, auto) auto;
+  align-content: stretch;
+  gap: 1rem;
 }
 
 #behavior-form fieldset.card legend {
-  line-height: 1.35;
-  min-height: 3.4em;
+  float: left;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  min-height: 3.4rem;
+  margin: 0;
+  padding: 0;
   display: flex;
   align-items: flex-start;
+  line-height: 1.4;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+#behavior-form fieldset.card legend + * {
+  clear: both;
 }
 
 #behavior-form .rating {
-  min-height: 34px;
+  min-height: 38px;
+  margin: 0;
+  padding: .15rem 0 0;
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
+  align-self: end;
+  gap: 1.4rem;
+}
+
+#behavior-form .rating label {
+  margin: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: .42rem;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+#behavior-form .rating input[type="radio"] {
+  margin: 0;
 }
 
 .nbd-hidden-field {
@@ -189,8 +233,16 @@
     min-height: 0;
     grid-template-rows: auto 48px;
   }
-  #behavior-form fieldset.card,
+
+  #behavior-form { gap: .85rem; }
+  #behavior-form fieldset.card {
+    min-height: 0;
+    padding: 1.15rem;
+    grid-template-rows: auto auto;
+  }
   #behavior-form fieldset.card legend { min-height: 0; }
+  #behavior-form .rating { gap: .9rem 1.15rem; }
+
   .nbd-preview-grid { grid-template-columns: 1fr; }
   .nbd-budget-score { grid-template-columns: 1fr; }
   .nbd-score-ring { margin: 0 auto; }
