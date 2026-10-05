@@ -1,0 +1,28 @@
+@media (min-width: 801px) {
+  .app-shell {
+    display: block;
+    min-height: 100vh;
+  }
+
+  .sidebar {
+    position: fixed;
+    inset: 0 auto 0 0;
+    width: 255px;
+    height: 100vh;
+    max-height: 100vh;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+  }
+
+  .content {
+    margin-left: 255px;
+    min-height: 100vh;
+  }
+}
+
+@media (max-width: 800px) {
+  .content {
+    margin-left: 0;
+  }
+}
