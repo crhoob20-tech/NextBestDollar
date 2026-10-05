@@ -68,60 +68,72 @@
   display: none !important;
 }
 
-.nbd-suggestions {
-  margin-top: 2rem;
-}
+.nbd-suggestions { margin-top: 2rem; }
+.nbd-section-heading { margin-bottom: 1rem; }
+.nbd-suggestion-grid { margin-top: 1rem; }
+.nbd-suggestion-card { display: flex; flex-direction: column; gap: .55rem; }
+.nbd-suggestion-card .button { margin-top: auto; align-self: flex-start; }
+.nbd-suggestion-reason { margin: .25rem 0 1rem; }
 
-.nbd-section-heading {
-  margin-bottom: 1rem;
-}
-
-.nbd-suggestion-grid {
-  margin-top: 1rem;
-}
-
-.nbd-suggestion-card {
+.nbd-capacity-banner {
+  margin-top: 1.15rem;
   display: flex;
-  flex-direction: column;
-  gap: .55rem;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: center;
+  padding: 1rem 1.15rem;
+  border-radius: 14px;
+  background: #eef6f2;
+  border: 1px solid var(--line);
 }
-
-.nbd-suggestion-card .button {
-  margin-top: auto;
-  align-self: flex-start;
-}
-
-.nbd-suggestion-reason {
-  margin: .25rem 0 1rem;
-}
+.nbd-capacity-banner strong { font-size: 1.35rem; }
 
 .nbd-slider-grid {
   display: grid;
   gap: 1.25rem;
   margin-top: 1.5rem;
 }
-
 .nbd-slider-grid label {
   display: grid;
   grid-template-columns: 1fr auto;
   gap: .5rem 1rem;
   align-items: center;
 }
-
 .nbd-slider-grid input[type="range"] {
   grid-column: 1 / -1;
   width: 100%;
   accent-color: var(--green);
 }
 
+.nbd-goal-plan {
+  margin-top: 1.25rem;
+  padding: 1.1rem;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #fff;
+}
+.nbd-goal-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: flex-start;
+  margin-bottom: .75rem;
+}
+.nbd-goal-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: .8rem 0;
+  border-top: 1px solid var(--line);
+}
+.nbd-goal-row div { display: grid; gap: .15rem; }
+.nbd-goal-row span { color: var(--muted); font-size: .84rem; }
+
 .nbd-preview-grid {
   grid-template-columns: repeat(4, minmax(0, 1fr));
   margin-top: 1.5rem;
 }
-
-.nbd-preview-grid .metric-value {
-  font-size: 1.8rem;
-}
+.nbd-preview-grid .metric-value { font-size: 1.8rem; }
 
 .nbd-market-note {
   margin-top: 1.2rem;
@@ -129,10 +141,41 @@
   border-radius: 12px;
   background: var(--blue);
 }
+.nbd-preset-buttons .button { flex: 0 0 auto; }
 
-.nbd-preset-buttons .button {
-  flex: 0 0 auto;
+.nbd-budget-score {
+  display: grid;
+  grid-template-columns: 180px minmax(0, 1fr);
+  gap: 1.5rem;
+  align-items: center;
 }
+.nbd-score-ring {
+  width: 160px;
+  height: 160px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: conic-gradient(var(--green) calc(var(--score) * 1%), #e7efeb 0);
+  position: relative;
+}
+.nbd-score-ring::after {
+  content: '';
+  width: 126px;
+  height: 126px;
+  border-radius: 50%;
+  background: white;
+  position: absolute;
+}
+.nbd-score-ring strong,
+.nbd-score-ring span { position: relative; z-index: 1; }
+.nbd-score-ring strong { font-size: 2.6rem; line-height: 1; }
+.nbd-score-ring span { color: var(--muted); font-size: .82rem; margin-top: -2.5rem; }
+.nbd-score-breakdown { display: grid; gap: .65rem; margin-top: 1rem; }
+.nbd-score-row { display: grid; grid-template-columns: 180px 1fr auto; gap: .7rem; align-items: center; }
+.nbd-score-track { height: 9px; border-radius: 99px; background: #e6efeb; overflow: hidden; }
+.nbd-score-track span { display: block; height: 100%; background: var(--green); }
+.nbd-advice-list { display: grid; gap: .8rem; margin-top: 1rem; }
+.nbd-advice { padding: .9rem 1rem; border-radius: 12px; border: 1px solid var(--line); background: #fff; }
 
 @media (max-width: 1100px) {
   .nbd-preview-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -147,8 +190,10 @@
     grid-template-rows: auto 48px;
   }
   #behavior-form fieldset.card,
-  #behavior-form fieldset.card legend {
-    min-height: 0;
-  }
+  #behavior-form fieldset.card legend { min-height: 0; }
   .nbd-preview-grid { grid-template-columns: 1fr; }
+  .nbd-budget-score { grid-template-columns: 1fr; }
+  .nbd-score-ring { margin: 0 auto; }
+  .nbd-score-row { grid-template-columns: 110px 1fr auto; }
+  .nbd-goal-head, .nbd-goal-row { flex-direction: column; }
 }
