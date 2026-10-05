@@ -1,4 +1,4 @@
-name: Publish browser beta
+name: Publish NextBestDollar website
 
 on:
   push:
@@ -28,10 +28,10 @@ jobs:
         uses: actions/checkout@v6
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
-      - name: Upload the browser beta
+      - name: Upload the NextBestDollar website
         uses: actions/upload-pages-artifact@v4
         with:
           path: "NextBestDollar/Next_Best_Dollar/index.html/browser_beta"
-      - name: Publish the browser beta
+      - name: Publish NextBestDollar
         id: deployment
         uses: actions/deploy-pages@v4
