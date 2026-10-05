@@ -25,7 +25,7 @@ button { cursor: pointer; }
 .brand span span { color: #bcf08c; }
 .brand small { display: block; margin-top: .9rem; color: #c6d9d2; font-size: .72rem; font-weight: 650; letter-spacing: .02em; text-transform: uppercase; }
 .nav-links { display: grid; gap: .6rem; }
-.nav-links.secondary { margin-top: auto; padding-top: 1.7rem; border-top: 1px solid rgba(255,255,255,.2); }
+.nav-links.secondary { margin-top: 1rem; padding-top: 1.7rem; border-top: 1px solid rgba(255,255,255,.2); }
 .nav-links p { color: #afc2bc; font-size: .77rem; font-weight: 700; letter-spacing: .03em; margin: 0 0 .55rem; text-transform: uppercase; }
 .nav-link { border: 1px solid rgba(213, 244, 234, .18); border-radius: 12px; background: rgba(39, 115, 95, .45); color: white; padding: .82rem .9rem; text-align: left; font-weight: 650; }
 .nav-link:hover, .nav-link.active { background: #245f51; border-color: rgba(213, 244, 234, .35); }
