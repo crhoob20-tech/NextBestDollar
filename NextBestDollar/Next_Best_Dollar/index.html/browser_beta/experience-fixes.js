@@ -1,9 +1,29 @@
 (function () {
   'use strict';
 
-  const money = value => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(Number(value || 0));
+  const KEY = 'nextbestdollar-browser-beta-v3';
+  const money = value => new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: Number.isInteger(Number(value || 0)) ? 0 : 2,
+    maximumFractionDigits: 2
+  }).format(Number(value || 0));
   const round2 = value => Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
   const clamp = (value, min, max) => Math.min(max, Math.max(min, Number(value || 0)));
+
+  function readState() {
+    try { return JSON.parse(localStorage.getItem(KEY) || '{}'); } catch (_) { return {}; }
+  }
+
+  function discretionaryCapacity() {
+    const s = readState();
+    const f = s.financial || {};
+    const sum = obj => Object.values(obj || {}).reduce((a, b) => a + Number(b || 0), 0);
+    const income = sum(f.income);
+    const spending = sum(f.spending);
+    const minimums = (f.debt || []).reduce((a, d) => a + Number(d.minimum_payment || 0), 0);
+    return round2(Math.max(0, income - spending - minimums));
+  }
 
   function fixAllocation() {
     const page = document.getElementById('page-allocation');
@@ -12,21 +32,22 @@
     if (!page || !page.classList.contains('active') || !form || !live || live.dataset.lockedAllocation === '1') return;
     live.dataset.lockedAllocation = '1';
 
-    // Remove the visible IRA checkbox while keeping the existing validation path satisfied.
     const rothCheckbox = form.elements.namedItem('roth_confirmed');
     if (rothCheckbox) {
       const label = rothCheckbox.closest('label');
       if (label) label.remove();
-      const hidden = document.createElement('input');
-      hidden.type = 'hidden';
-      hidden.name = 'roth_confirmed';
-      hidden.value = 'true';
-      form.appendChild(hidden);
+      if (!form.querySelector('input[type="hidden"][name="roth_confirmed"]')) {
+        const hidden = document.createElement('input');
+        hidden.type = 'hidden';
+        hidden.name = 'roth_confirmed';
+        hidden.value = 'true';
+        form.appendChild(hidden);
+      }
     }
 
-    const capacityText = live.querySelector('.nbd-capacity-banner strong')?.textContent || '';
-    const capacityMatch = capacityText.replace(/[$,/a-zA-Z]/g, ' ').match(/-?\d+(?:\.\d+)?/);
-    const capacity = round2(capacityMatch ? Number(capacityMatch[0]) : 0);
+    const capacity = discretionaryCapacity();
+    const bannerValue = live.querySelector('.nbd-capacity-banner strong');
+    if (bannerValue) bannerValue.textContent = money(capacity) + '/mo';
 
     const sliders = {
       debt: document.getElementById('nbd-debt-slider'),
@@ -42,16 +63,19 @@
     };
     if (Object.values(sliders).some(x => !x) || Object.values(inputs).some(x => !x)) return;
 
+    const wholeDollarCapacity = Math.abs(capacity - Math.round(capacity)) < 0.005;
+    const unitRound = value => wholeDollarCapacity ? Math.round(Number(value || 0)) : round2(value);
+
     Object.values(sliders).forEach(slider => {
       slider.max = String(capacity);
-      slider.step = '0.01';
+      slider.step = wholeDollarCapacity ? '1' : '0.01';
     });
 
     let updating = false;
     const keys = ['debt', 'cash', 'roth', 'brokerage'];
 
     function currentValues() {
-      return Object.fromEntries(keys.map(key => [key, round2(clamp(sliders[key].value, 0, capacity))]));
+      return Object.fromEntries(keys.map(key => [key, unitRound(clamp(sliders[key].value, 0, capacity))]));
     }
 
     function writeValues(values, triggerKey) {
@@ -60,9 +84,11 @@
         sliders[key].value = String(value);
         inputs[key].value = String(value);
       });
+
       updating = true;
       sliders[triggerKey || 'debt'].dispatchEvent(new Event('input', { bubbles: true }));
       updating = false;
+
       const status = document.getElementById('nbd-allocation-status');
       if (status) {
         status.className = 'callout';
@@ -73,7 +99,7 @@
     function rebalance(changedKey) {
       if (updating || capacity <= 0) return;
       const values = currentValues();
-      values[changedKey] = round2(clamp(values[changedKey], 0, capacity));
+      values[changedKey] = unitRound(clamp(values[changedKey], 0, capacity));
       const remaining = round2(capacity - values[changedKey]);
       const others = keys.filter(key => key !== changedKey);
       const otherTotal = others.reduce((sum, key) => sum + values[key], 0);
@@ -84,7 +110,7 @@
           if (index === others.length - 1) {
             values[key] = round2(remaining - assigned);
           } else {
-            values[key] = round2(remaining * values[key] / otherTotal);
+            values[key] = unitRound(remaining * values[key] / otherTotal);
             assigned = round2(assigned + values[key]);
           }
         });
@@ -93,6 +119,7 @@
         const fallback = changedKey === 'cash' ? 'brokerage' : 'cash';
         values[fallback] = remaining;
       }
+
       writeValues(values, changedKey);
     }
 
@@ -100,6 +127,7 @@
       if (capacity <= 0) return;
       const values = currentValues();
       const total = round2(keys.reduce((sum, key) => sum + values[key], 0));
+
       if (total <= 0) {
         values.cash = capacity;
       } else if (Math.abs(total - capacity) > 0.005) {
@@ -108,11 +136,12 @@
           if (index === keys.length - 1) {
             values[key] = round2(capacity - assigned);
           } else {
-            values[key] = round2(capacity * values[key] / total);
+            values[key] = unitRound(capacity * values[key] / total);
             assigned = round2(assigned + values[key]);
           }
         });
       }
+
       writeValues(values, 'debt');
     }
 
@@ -120,7 +149,7 @@
       sliders[key].addEventListener('input', () => rebalance(key));
       inputs[key].addEventListener('input', () => {
         if (updating) return;
-        sliders[key].value = String(round2(clamp(inputs[key].value, 0, capacity)));
+        sliders[key].value = String(unitRound(clamp(inputs[key].value, 0, capacity)));
         rebalance(key);
       });
     });
@@ -165,16 +194,38 @@
       </section>`;
   }
 
+  function polishFeedback() {
+    const page = document.getElementById('page-feedback');
+    if (!page || !page.classList.contains('active') || page.dataset.polishedFeedback === '1') return;
+    const url = window.NBD_CONFIG && window.NBD_CONFIG.googleFormUrl;
+    if (!url) return;
+    page.dataset.polishedFeedback = '1';
+
+    const oldStatus = document.getElementById('nbd-feedback-status');
+    if (oldStatus) oldStatus.remove();
+    const localForm = document.getElementById('feedback-form');
+    if (localForm) localForm.remove();
+    const launchCard = page.querySelector('article.card.section');
+    if (launchCard) {
+      launchCard.innerHTML = `
+        <p class="eyebrow">Central beta feedback</p>
+        <h2>Send feedback directly to NextBestDollar</h2>
+        <p class="small" style="margin-top:.5rem;max-width:720px">Your response opens in Google Forms and is collected centrally so it can be reviewed with the rest of the beta feedback. Do not include sensitive financial details.</p>
+        <div class="button-row" style="margin-top:1.25rem"><a class="button" href="${url}" target="_blank" rel="noopener noreferrer">Open beta feedback form</a></div>`;
+    }
+  }
+
   function inject() {
     fixAllocation();
     enhanceAbout();
+    polishFeedback();
   }
 
   const observer = new MutationObserver(() => requestAnimationFrame(inject));
   observer.observe(document.documentElement, { subtree: true, childList: true, attributes: true, attributeFilter: ['class'] });
   window.addEventListener('load', inject);
   document.addEventListener('click', event => {
-    if (event.target.closest('[data-page="allocation"], [data-page="guide"]')) setTimeout(inject, 0);
+    if (event.target.closest('[data-page="allocation"], [data-page="guide"], [data-page="feedback"]')) setTimeout(inject, 0);
   });
   setTimeout(inject, 350);
 })();
