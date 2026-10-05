@@ -4,204 +4,158 @@
   const KEY = 'nextbestdollar-browser-beta-v3';
   const OLD = 'nextbestdollar-browser-beta-v2';
 
-  function number(value) {
-    const n = Number(value || 0);
-    return Number.isFinite(n) && n >= 0 ? n : 0;
-  }
+  const n = value => {
+    const x = Number(value || 0);
+    return Number.isFinite(x) && x >= 0 ? x : 0;
+  };
 
-  function money(value) {
-    return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(number(value));
-  }
+  const money = value => new Intl.NumberFormat('en-US', {
+    style: 'currency', currency: 'USD'
+  }).format(n(value));
 
   function readState() {
     try {
       const raw = localStorage.getItem(KEY) || localStorage.getItem(OLD);
       if (!raw) return null;
       const parsed = JSON.parse(raw);
-      if (parsed && parsed.format === 'nextbestdollar-web' && parsed.profile) return parsed.profile;
-      return parsed;
+      return parsed && parsed.format === 'nextbestdollar-web' && parsed.profile ? parsed.profile : parsed;
     } catch (_) {
       return null;
     }
   }
 
-  function suggestedGoals(state) {
-    if (!state || !state.financial_complete) return [];
+  function suggestionsFor(state) {
+    if (!state) return [{
+      type: 'Other milestone', name: 'Choose your next milestone',
+      reason: 'Start with one thing you want your money to make possible.',
+      target_amount: '', progress_amount: 0, priority: 'Medium', notes: ''
+    }];
 
     const f = state.financial || {};
-    const debtList = Array.isArray(f.debt) ? f.debt : Object.values(f.debt || {});
-    const existing = new Set((state.goals || []).map(goal => goal && goal.type));
-    const results = [];
+    const debts = Array.isArray(f.debt) ? f.debt : Object.values(f.debt || {});
+    const spending = Object.values(f.spending || {}).reduce((s, v) => s + n(v), 0);
+    const debtMinimums = debts.reduce((s, d) => s + n(d && d.minimum_payment), 0);
+    const monthlyOutflow = spending + debtMinimums;
+    const reserve = n(f.accounts && f.accounts.emergency_fund);
+    const debt = debts.reduce((s, d) => s + n(d && d.balance), 0);
+    const income = Object.values(f.income || {}).reduce((s, v) => s + n(v), 0);
+    const freeCash = income - monthlyOutflow;
+    const dependents = parseInt(state.personal && state.personal.dependents, 10) || 0;
+    const match = n(f.benefits && f.benefits.employer_match);
+    const contribution = n(f.benefits && f.benefits.current_retirement_contribution);
+    const existing = new Set((state.goals || []).map(g => g && g.type));
+    const out = [];
 
     function add(type, name, reason, targetAmount, progressAmount, priority) {
       if (existing.has(type)) return;
-      results.push({
-        type,
-        name,
-        reason,
+      out.push({
+        type, name, reason,
         target_amount: targetAmount == null ? '' : targetAmount,
         progress_amount: progressAmount == null ? 0 : progressAmount,
-        priority: priority || 'Medium',
-        notes: ''
+        priority: priority || 'Medium', notes: ''
       });
     }
 
-    const totalDebt = debtList.reduce((sum, debt) => sum + number(debt && debt.balance), 0);
-    if (totalDebt > 0) {
-      add(
-        'Pay off debt',
-        'Build a debt payoff goal',
-        `You reported ${money(totalDebt)} in debt. Review a payoff target and timeline alongside your required payments.`,
-        totalDebt,
-        0,
-        'High'
-      );
+    if (debt > 0) {
+      add('Pay off debt', 'Build a debt payoff goal',
+        `You reported ${money(debt)} in debt. Turn that balance into a payoff target and timeline.`,
+        debt, 0, 'High');
     }
 
-    const livingSpending = Object.values(f.spending || {}).reduce((sum, value) => sum + number(value), 0);
-    const debtMinimums = debtList.reduce((sum, debt) => sum + number(debt && debt.minimum_payment), 0);
-    const monthlyOutflows = livingSpending + debtMinimums;
-    const reserve = number(f.accounts && f.accounts.emergency_fund);
-
-    if (monthlyOutflows > 0 && reserve < monthlyOutflows) {
-      add(
-        'Emergency fund',
-        'Build a cash buffer',
-        `Your designated emergency savings (${money(reserve)}) is below one month of recorded outflows (${money(monthlyOutflows)}). Choose a reserve target that fits you.`,
-        '',
-        reserve,
-        'Medium'
-      );
+    if (monthlyOutflow > 0 && reserve < monthlyOutflow * 3) {
+      add('Emergency fund', 'Build a stronger cash buffer',
+        `Your designated emergency savings are ${money(reserve)}. Three months of your recorded outflows is about ${money(monthlyOutflow * 3)}. Review the target and choose what fits your situation.`,
+        monthlyOutflow * 3, reserve, debt > 0 ? 'Medium' : 'High');
     }
 
-    const dependents = Number.parseInt(state.personal && state.personal.dependents, 10) || 0;
     if (dependents > 0) {
-      add(
-        'Children / family',
-        'Plan for family costs',
-        'You listed dependents. Consider a goal for care, education, or another family expense.',
-        '',
-        0,
-        'Medium'
-      );
+      add('Children / family', 'Plan for family costs',
+        'You listed dependents. Consider a goal for care, education, or another recurring family priority.',
+        '', 0, 'Medium');
     }
 
-    if (!results.length) {
-      add(
-        'Other milestone',
-        'Choose your next milestone',
-        'What would you like your money to make possible? Choose your own target and timeline.',
-        '',
-        0,
-        'Medium'
-      );
+    if (match > contribution) {
+      add('Invest', 'Review your employer retirement match',
+        `You entered an employer match of ${match}% and a current retirement contribution of ${contribution}%. Review your plan rules and consider whether increasing contributions fits your budget.`,
+        '', 0, 'Medium');
+    } else if (freeCash > 0 && debt <= 0) {
+      add('Invest', 'Build a consistent investing goal',
+        `You have about ${money(freeCash)} of monthly breathing room after recorded living costs and debt minimums. Consider a long-term investing target after maintaining the cash reserve you need.`,
+        '', 0, 'Medium');
     }
 
-    return results;
+    if (!out.length) {
+      add('Other milestone', 'Choose your next milestone',
+        'Your core profile does not point to one obvious priority. Choose the next milestone that matters most to you.',
+        '', 0, 'Medium');
+    }
+
+    return out.slice(0, 4);
   }
 
   function fillGoalForm(goal) {
     const form = document.getElementById('goal-form');
     if (!form) return;
-
     const set = (name, value) => {
       const field = form.elements.namedItem(name);
       if (field) field.value = value == null ? '' : String(value);
     };
-
     set('name', goal.name);
     set('type', goal.type);
     set('target_amount', goal.target_amount);
     set('progress_amount', goal.progress_amount);
     set('priority', goal.priority);
     set('notes', goal.notes || '');
-
     const notice = document.getElementById('app-notice');
-    if (notice) notice.textContent = 'Suggested goal loaded below. Review it, choose any missing target amount or date, then press Save changes.';
-
+    if (notice) notice.textContent = 'Suggestion loaded. Review the target and date, then save it as your goal.';
     form.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    const first = form.elements.namedItem('name');
-    if (first) first.focus({ preventScroll: true });
   }
 
-  function makeSuggestionCard(goal) {
+  function cardFor(goal) {
     const card = document.createElement('article');
-    card.className = 'card';
-
-    const title = document.createElement('h3');
-    title.textContent = goal.name;
-    card.appendChild(title);
-
-    const type = document.createElement('p');
-    type.className = 'small';
-    type.textContent = `${goal.type} · ${goal.priority} priority`;
-    card.appendChild(type);
-
+    card.className = 'card nbd-suggestion-card';
+    const h = document.createElement('h3');
+    h.textContent = goal.name;
+    const meta = document.createElement('p');
+    meta.className = 'small';
+    meta.textContent = `${goal.type} · ${goal.priority} priority`;
     const reason = document.createElement('p');
-    reason.style.marginTop = '.75rem';
+    reason.className = 'nbd-suggestion-reason';
     reason.textContent = goal.reason;
-    card.appendChild(reason);
-
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'button secondary-button';
-    button.style.marginTop = '1rem';
     button.textContent = 'Use this suggestion';
-    button.addEventListener('click', function () { fillGoalForm(goal); });
-    card.appendChild(button);
-
+    button.addEventListener('click', () => fillGoalForm(goal));
+    card.append(h, meta, reason, button);
     return card;
   }
 
-  function injectSuggestions() {
+  function inject() {
     const page = document.getElementById('page-goals');
-    if (!page || !page.classList.contains('active')) return;
-    if (document.getElementById('nbd-suggested-goals')) return;
-
     const form = document.getElementById('goal-form');
-    if (!form) return;
+    if (!page || !page.classList.contains('active') || !form) return;
 
-    const state = readState();
+    const old = document.getElementById('nbd-suggested-goals');
+    if (old) return;
+
     const section = document.createElement('section');
     section.id = 'nbd-suggested-goals';
-    section.className = 'card section';
+    section.className = 'section nbd-suggestions';
+    section.innerHTML = '<div class="nbd-section-heading"><div><p class="eyebrow">Based on your profile</p><h2>Suggested next goals</h2><p class="small">These are starting points generated from the financial facts you entered. Review every suggestion before saving it.</p></div></div>';
 
-    const heading = document.createElement('h2');
-    heading.textContent = 'Suggested goals from your profile';
-    section.appendChild(heading);
-
-    const intro = document.createElement('p');
-    intro.className = 'small';
-    intro.style.marginTop = '.5rem';
-    intro.textContent = 'These are explainable starting points based on the facts you entered. Nothing is added until you review and save it.';
-    section.appendChild(intro);
-
-    if (!state || !state.financial_complete) {
-      const message = document.createElement('div');
-      message.className = 'callout warning';
-      message.textContent = 'Complete Financial facts first so NextBestDollar can suggest goals from your actual situation.';
-      section.appendChild(message);
-    } else {
-      const suggestions = suggestedGoals(state);
-      const grid = document.createElement('div');
-      grid.className = 'card-grid';
-      grid.style.marginTop = '1rem';
-      suggestions.forEach(goal => grid.appendChild(makeSuggestionCard(goal)));
-      section.appendChild(grid);
-    }
-
+    const grid = document.createElement('div');
+    grid.className = 'card-grid nbd-suggestion-grid';
+    suggestionsFor(readState()).forEach(goal => grid.appendChild(cardFor(goal)));
+    section.appendChild(grid);
     form.parentNode.insertBefore(section, form);
   }
 
-  const observer = new MutationObserver(function () {
-    window.requestAnimationFrame(injectSuggestions);
+  const observer = new MutationObserver(() => requestAnimationFrame(inject));
+  observer.observe(document.documentElement, { subtree: true, childList: true, attributes: true, attributeFilter: ['class'] });
+  window.addEventListener('load', inject);
+  document.addEventListener('click', event => {
+    if (event.target.closest('[data-page="goals"], [data-page-link="goals"]')) setTimeout(inject, 0);
   });
-
-  observer.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['class'] });
-  window.addEventListener('load', injectSuggestions);
-  document.addEventListener('click', function (event) {
-    if (event.target.closest('[data-page="goals"], [data-page-link="goals"]')) {
-      window.setTimeout(injectSuggestions, 0);
-    }
-  });
+  setTimeout(inject, 250);
 })();
