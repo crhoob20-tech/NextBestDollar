@@ -36,7 +36,10 @@
         <header class="topbar">
           <button class="mobile-menu" aria-label="Open menu">☰</button>
           <span>Browser-only beta</span>
-          <button id="backup-button" class="button secondary-button">Download backup</button>
+          <div class="button-row" style="margin:0">
+            <button id="import-profile-button" class="button secondary-button" type="button">Import saved JSON</button>
+            <button id="backup-button" class="button secondary-button" type="button">Download backup</button>
+          </div>
         </header>
 
         <p id="app-notice" role="status" aria-live="polite"></p>
@@ -51,9 +54,14 @@
         <section id="page-feedback" class="page"></section>
       </main>
     </div>
-    <input id="restore-input" type="file" accept="application/json" hidden />
+    <input id="restore-input" type="file" accept=".json,application/json" hidden />
     <script src="config.js"></script>
     <script src="app.js"></script>
     <script src="terms.js"></script>
+    <script>
+      document.getElementById('import-profile-button').addEventListener('click', function () {
+        document.getElementById('restore-input').click();
+      });
+    </script>
   </body>
 </html>
