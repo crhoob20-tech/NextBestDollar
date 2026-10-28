@@ -61,3 +61,9 @@ Master of Accounting | The Ohio State University
 ## Disclaimer
 
 NextBestDollar is an independent educational software project and does not provide personalized financial, investment, or tax advice.
+
+
+## Application Preview
+
+![NextBestDollar Dashboard](nextbestdollar-overview.png)
+
